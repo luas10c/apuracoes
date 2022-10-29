@@ -17,7 +17,7 @@ const Home = (props: Props) => {
     }, 2000)
 
     return () => {
-      setInterval(interval)
+      clearInterval(interval)
     }
   }, [])
 
