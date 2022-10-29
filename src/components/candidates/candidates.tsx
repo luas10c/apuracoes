@@ -9,6 +9,10 @@ interface Props {
 export const Candidates = (props: Props) => {
   const { data } = props
 
+  if (!data) {
+    return
+  }
+
   return (
     <div className={styles.container}>
       {data.map((item) => {
