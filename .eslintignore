@@ -1,0 +1,7 @@
+# misc
+node_modules
+.next
+
+# env files
+.env*
+!.env.example
