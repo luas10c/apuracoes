@@ -14,7 +14,7 @@ export const fetchResults = async () => {
       position: Number(item.seq),
       image_url: Number(item.n) === 22 ? '/bolsonaro.jpg' : '/lula.jpg',
       pvap: item.pvap,
-      text: item.st,
+      status: item.st,
       votes: item.vap
     }
   })

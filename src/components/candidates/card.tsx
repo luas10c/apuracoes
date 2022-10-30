@@ -1,4 +1,5 @@
 import Image from 'next/image'
+import LottieView from 'lottie-react'
 
 import styles from '../../styles/card.module.scss'
 
@@ -15,6 +16,13 @@ export const Card = (props: Props) => {
         candidate.position === 1 ? styles.first : ''
       }`}
     >
+      {candidate.position === 1 && !!candidate.status.length && (
+        <LottieView
+          animationData={require('../../assets/fireworks.json')}
+          className={styles.fireworks}
+          loop
+        />
+      )}
       <header className={styles.header}>
         <div className={styles.image}>
           {candidate.party_number === 22 ? (
@@ -46,6 +54,11 @@ export const Card = (props: Props) => {
           <span className={styles.votes}>{candidate.votes}</span>
         </div>
       </header>
+      {candidate.position === 1 && !!candidate.status.length && (
+        <div className={styles.status}>
+          <span>{candidate.status}</span>
+        </div>
+      )}
     </div>
   )
 }
