@@ -1,3 +1,9 @@
+.container {
+  width: 92%;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
 .footer {
   text-align: center;
   font-family: Arial;
@@ -5,5 +11,5 @@
   font-weight: 700;
   color: #7f6aa8;
   font-size: .875em;
-  padding-top: 18px;
+  padding: 18px 0;
 }

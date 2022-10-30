@@ -56,7 +56,7 @@ const Home = () => {
   }
 
   return (
-    <div>
+    <div className={styles.container}>
       <Information
         white_votes={results.vb}
         null_votes={results.vn}
