@@ -57,19 +57,21 @@ const Home = () => {
 
   return (
     <div className={styles.container}>
-      <Information
-        white_votes={results.vb}
-        null_votes={results.vn}
-        annulled_votes={results.van}
-        valid_votes={results.vvc}
-      />
-      <Candidates data={results.cand} />
-      <footer className={styles.footer}>
-        <div>
-          <span>
-            Última atualização: {results.dg} {results.hg}
-          </span>
+      <div className={styles.wrapper}>
+        <div className={styles.information}>
+          <Information
+            white_votes={results.vb}
+            null_votes={results.vn}
+            annulled_votes={results.van}
+            valid_votes={results.vvc}
+          />
         </div>
+        <div className={styles.results}>
+          <Candidates data={results.cand} />
+        </div>
+      </div>
+      <footer className={styles.footer}>
+        Última atualização: {results.dg} {results.hg}
       </footer>
     </div>
   )
