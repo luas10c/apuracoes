@@ -25,12 +25,13 @@ export const Card = (props: Props) => {
       )}
       <header className={styles.header}>
         <div className={styles.info}>
-          <div className={styles.image}>
+          <div className={styles.image__container}>
             {candidate.party_number === 22 ? (
               <Image
                 src={candidate.image_url}
                 width={64}
                 height={64}
+                className={styles.image}
                 alt="#"
                 blurDataURL="blue"
               />
