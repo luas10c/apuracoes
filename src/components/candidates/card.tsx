@@ -54,7 +54,8 @@ export const Card = (props: Props) => {
               {candidate.pvap} <small>%</small>
             </p>
             <span className={styles.votes}>
-              Total de votos: <span>{candidate.votes}</span>
+              Total de votos:{' '}
+              <span>{Intl.NumberFormat('pt-BR').format(candidate.votes)}</span>
             </span>
           </div>
         </div>

@@ -29,16 +29,20 @@ export const Information = (props: Props) => {
             </span>
           </li>
           <li>
-            Votos válidos: <span>{valid_votes}</span>
+            Votos válidos:{' '}
+            <span>{Intl.NumberFormat('pt-BR').format(valid_votes)}</span>
           </li>
           <li>
-            Votos brancos: <span>{white_votes}</span>
+            Votos brancos:{' '}
+            <span>{Intl.NumberFormat('pt-BR').format(white_votes)}</span>
           </li>
           <li>
-            Votos nulos: <span>{null_votes}</span>
+            Votos nulos:{' '}
+            <span>{Intl.NumberFormat('pt-BR').format(null_votes)}</span>
           </li>
           <li>
-            Votos cancelados: <span>{annulled_votes}</span>
+            Votos cancelados:{' '}
+            <span>{Intl.NumberFormat('pt-BR').format(annulled_votes)}</span>
           </li>
         </ul>
       </div>
