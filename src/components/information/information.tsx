@@ -21,8 +21,7 @@ export const Information = (props: Props) => {
 
   const diffVotes = (cands: any[]) => {
     return parseInt(cands[0].votes) - parseInt(cands[1].votes)
-  };
-
+  }
 
   return (
     <div className={styles.container}>
