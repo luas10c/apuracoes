@@ -16,6 +16,7 @@ interface Results {
   vn: number
   vb: number
   van: number
+  psi: number
 }
 
 const Home = () => {
@@ -64,6 +65,7 @@ const Home = () => {
             null_votes={results.vn}
             annulled_votes={results.van}
             valid_votes={results.vvc}
+            psi={results.psi}
           />
         </div>
         <div className={styles.results}>

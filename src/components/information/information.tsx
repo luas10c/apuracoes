@@ -5,6 +5,7 @@ interface Props {
   null_votes: number
   valid_votes: number
   annulled_votes: number
+  psi: number
 }
 
 export const Information = (props: Props) => {
@@ -12,13 +13,21 @@ export const Information = (props: Props) => {
     white_votes = 0,
     null_votes = 0,
     valid_votes = 0,
-    annulled_votes = 0
+    annulled_votes = 0,
+    psi = 0
   } = props
 
   return (
     <div className={styles.container}>
       <div>
         <ul>
+          <li>
+            Concluído:{' '}
+            <span>
+              {psi}&nbsp;
+              <small>%</small>
+            </span>
+          </li>
           <li>
             Votos válidos: <span>{valid_votes}</span>
           </li>
