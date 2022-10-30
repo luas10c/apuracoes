@@ -3,16 +3,29 @@ import { toast } from 'react-hot-toast'
 
 import { fetchResults } from '#/services/fetch-results'
 
+import { Information } from '#/components/information'
 import { Candidates } from '../components/candidates'
 
+import styles from '../styles/home.module.scss'
+
+interface Results {
+  cand: []
+  dg: string
+  hg: string
+  vvc: number
+  vn: number
+  vb: number
+  van: number
+}
+
 const Home = () => {
-  const [candidates, setCandidates] = useState([])
+  const [results, setResults] = useState<Results>(null)
 
   useEffect(() => {
     const toaster = toast.loading('Buscando candidatos...')
     fetchResults()
       .then((data) => {
-        setCandidates(data)
+        setResults(data)
       })
       .catch((error) => {
         toast.error(error.message)
@@ -23,22 +36,43 @@ const Home = () => {
   }, [])
 
   useEffect(() => {
-    if (!candidates) {
+    if (!results) {
       return
     }
 
     const interval = setInterval(() => {
       fetchResults().then((data) => {
-        setCandidates(data)
+        setResults(data)
       })
     }, 5000)
 
     return () => {
       clearInterval(interval)
     }
-  }, [candidates])
+  }, [results])
 
-  return <Candidates data={candidates} />
+  if (!results) {
+    return null
+  }
+
+  return (
+    <div>
+      <Information
+        white_votes={results.vb}
+        null_votes={results.vn}
+        annulled_votes={results.van}
+        valid_votes={results.vvc}
+      />
+      <Candidates data={results.cand} />
+      <footer className={styles.footer}>
+        <div>
+          <span>
+            Útima atualização: {results.dg} {results.hg}
+          </span>
+        </div>
+      </footer>
+    </div>
+  )
 }
 
 export default Home
