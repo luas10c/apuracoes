@@ -67,7 +67,7 @@ const Home = () => {
       <footer className={styles.footer}>
         <div>
           <span>
-            Útima atualização: {results.dg} {results.hg}
+            Última atualização: {results.dg} {results.hg}
           </span>
         </div>
       </footer>
