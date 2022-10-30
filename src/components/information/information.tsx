@@ -6,6 +6,7 @@ interface Props {
   valid_votes: number
   annulled_votes: number
   psi: number
+  cands: any[]
 }
 
 export const Information = (props: Props) => {
@@ -14,8 +15,14 @@ export const Information = (props: Props) => {
     null_votes = 0,
     valid_votes = 0,
     annulled_votes = 0,
-    psi = 0
+    psi = 0,
+    cands = []
   } = props
+
+  const diffVotes = (cands: any[]) => {
+    return parseInt(cands[0].votes) - parseInt(cands[1].votes)
+  };
+
 
   return (
     <div className={styles.container}>
@@ -43,6 +50,10 @@ export const Information = (props: Props) => {
           <li>
             Votos cancelados:{' '}
             <span>{Intl.NumberFormat('pt-BR').format(annulled_votes)}</span>
+          </li>
+          <li>
+            Diferença de votos:{' '}
+            <span>{Intl.NumberFormat('pt-BR').format(diffVotes(cands))}</span>
           </li>
         </ul>
       </div>

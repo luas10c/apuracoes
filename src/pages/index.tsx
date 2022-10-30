@@ -66,6 +66,7 @@ const Home = () => {
             annulled_votes={results.van}
             valid_votes={results.vvc}
             psi={results.psi}
+            cands={results.cand}
           />
         </div>
         <div className={styles.results}>
