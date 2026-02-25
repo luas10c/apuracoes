@@ -13,6 +13,9 @@ import a11y from 'eslint-plugin-jsx-a11y'
 
 import nextjs from '@next/eslint-plugin-next'
 
+import jest from 'eslint-plugin-jest'
+import tl from 'eslint-plugin-testing-library'
+
 export default defineConfig([
   globalIgnores(['node_modules', '.next', 'coverage']),
   js.configs.recommended,
@@ -50,5 +53,18 @@ export default defineConfig([
       ...a11y.configs.recommended.rules,
       ...nextjs.configs.recommended.rules
     }
+  },
+  {
+    files: ['**/*.{spec,test}.ts?(x)'],
+    languageOptions: {
+      globals: {
+        ...globals.jest
+      }
+    },
+    ...jest.configs['flat/recommended']
+  },
+  {
+    files: ['**/*.{spec,test}.ts?(x)'],
+    ...tl.configs['flat/react']
   }
 ])
