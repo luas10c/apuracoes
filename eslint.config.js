@@ -17,7 +17,7 @@ import jest from 'eslint-plugin-jest'
 import tl from 'eslint-plugin-testing-library'
 
 export default defineConfig([
-  globalIgnores(['node_modules', '.next', 'coverage']),
+  globalIgnores(['node_modules', '.next', 'coverage', 'next-env.d.ts']),
   js.configs.recommended,
   ts.configs.recommended,
   {
