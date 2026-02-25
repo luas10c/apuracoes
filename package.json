@@ -16,7 +16,6 @@
   },
   "dependencies": {
     "husky": "^9.1.7",
-    "lottie-react": "^2.4.1",
     "motion": "^12.34.3",
     "next": "^16.1.6",
     "react": "^19.2.4",
