@@ -2,8 +2,8 @@ import Image from 'next/image'
 
 export default function Home() {
   return (
-    <section className="mx-auto w-full max-w-7xl space-y-4">
-      <div className="border-royal-purple-500/40 flex items-center justify-between border-b p-2">
+    <section className="mx-auto w-full max-w-7xl space-y-4 px-4">
+      <div className="border-royal-purple-500/40 flex items-center justify-between border-b p-4">
         <span className="text-royal-purple-500 text-sm font-semibold tracking-widest uppercase">
           Apuração ao vivo
         </span>
