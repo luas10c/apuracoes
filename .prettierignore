@@ -1,6 +1,15 @@
 # misc
 node_modules
+
+.DS_Store
+
 .next
+dist
+out
+
+coverage
+
+.eslintcache
 
 # env files
 .env*
