@@ -12,7 +12,8 @@
     "test:ci": "jest --passWithNoTests --ci",
     "test:watch": "jest --passWithNoTests --watch",
     "test:watchAll": "jest --passWithNoTests --watchAll",
-    "test:coverage": "jest --passWithNoTests --coverage"
+    "test:coverage": "jest --passWithNoTests --coverage",
+    "prepare": "husky"
   },
   "dependencies": {
     "husky": "^9.1.7",
