@@ -1,33 +1,35 @@
 @import "tailwindcss";
 
 @theme {
+  --font-sans: var(--font-inter);
+
   --container-8xl: 88rem;
 
-  --color-vulcan-50: oklch(0.956 0.005 286.52);
-  --color-vulcan-100: oklch(0.914 0.009 279.78);
-  --color-vulcan-200: oklch(0.828 0.022 283.09);
-  --color-vulcan-300: oklch(0.744 0.032 281.5);
-  --color-vulcan-400: oklch(0.665 0.043 282.07);
-  --color-vulcan-500: oklch(0.58 0.054 280.76);
-  --color-vulcan-600: oklch(0.495 0.061 280.44);
-  --color-vulcan-700: oklch(0.408 0.05 279.5);
-  --color-vulcan-800: oklch(0.322 0.041 280);
-  --color-vulcan-900: oklch(0.233 0.031 280.97);
-  --color-vulcan-950: oklch(0.192 0.024 280.17);
+  --color-woodsmoke-50: oklch(98.5% 0.002 270);
+  --color-woodsmoke-100: oklch(96.4% 0.003 270);
+  --color-woodsmoke-200: oklch(91.6% 0.003 270);
+  --color-woodsmoke-300: oklch(86.5% 0.004 270);
+  --color-woodsmoke-400: oklch(70.3% 0.006 270);
+  --color-woodsmoke-500: oklch(54.3% 0.007 270);
+  --color-woodsmoke-600: oklch(44.2% 0.007 270);
+  --color-woodsmoke-700: oklch(36.6% 0.006 270);
+  --color-woodsmoke-800: oklch(26.6% 0.005 270);
+  --color-woodsmoke-900: oklch(20.3% 0.004 270);
+  --color-woodsmoke-950: oklch(14.5% 0.003 270);
 
-  --color-lilac-50: oklch(0.966 0.007 295.67);
-  --color-lilac-100: oklch(0.933 0.014 299.9);
-  --color-lilac-200: oklch(0.857 0.031 298.26);
-  --color-lilac-300: oklch(0.788 0.046 299.65);
-  --color-lilac-400: oklch(0.713 0.065 298.3);
-  --color-lilac-500: oklch(0.645 0.08 298.88);
-  --color-lilac-600: oklch(0.569 0.096 298.92);
-  --color-lilac-700: oklch(0.467 0.094 298.61);
-  --color-lilac-800: oklch(0.361 0.073 299.22);
-  --color-lilac-900: oklch(0.246 0.049 298.69);
-  --color-lilac-950: oklch(0.193 0.038 299.79);
+  --color-royal-purple-50: #faf7fd;
+  --color-royal-purple-100: #f2ecfb;
+  --color-royal-purple-200: #e8dcf8;
+  --color-royal-purple-300: #d6c0f2;
+  --color-royal-purple-400: #bc98e8;
+  --color-royal-purple-500: #a270dc;
+  --color-royal-purple-600: #8c51cc;
+  --color-royal-purple-700: #773fb1;
+  --color-royal-purple-800: #6b3b9b;
+  --color-royal-purple-900: #532e75;
+  --color-royal-purple-950: #361655;
 }
 
 body {
-  @apply bg-vulcan-950 min-h-screen antialiased;
+  @apply bg-woodsmoke-900 text-white min-h-screen antialiased;
 }
