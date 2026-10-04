@@ -3,13 +3,11 @@ import { defineConfig, globalIgnores } from 'eslint/config'
 import globals from 'globals'
 
 import js from '@eslint/js'
-
 import ts from 'typescript-eslint'
 
-import prettier from 'eslint-plugin-prettier'
-
-import react from 'eslint-plugin-react'
-import a11y from 'eslint-plugin-jsx-a11y'
+import stylistic from '@stylistic/eslint-plugin'
+import react from '@eslint-react/eslint-plugin'
+import tailwindcss from 'eslint-plugin-tailwindcss'
 
 import nextjs from '@next/eslint-plugin-next'
 
@@ -20,11 +18,22 @@ export default defineConfig([
   globalIgnores(['node_modules', '.next', 'coverage', 'next-env.d.ts']),
   js.configs.recommended,
   ts.configs.recommended,
+  stylistic.configs.customize({
+    indent: 2,
+    quotes: 'single',
+    semi: false,
+    commaDangle: 'never',
+    braceStyle: '1tbs',
+    blockSpacing: true,
+    objectCurlySpacing: true,
+    arrayBracketSpacing: false,
+    arrowParens: 'always',
+    quoteProps: 'consistent',
+    jsx: true,
+  }),
   {
     plugins: {
-      prettier,
       react,
-      'jsx-a11y': a11y,
       '@next/next': nextjs
     },
     languageOptions: {
@@ -42,16 +51,23 @@ export default defineConfig([
         React: true
       }
     },
+    rules: {
+      ...react.configs.recommended.rules,
+      ...nextjs.configs.recommended.rules
+    }
+  },
+  {
+    name: 'tailwindcss/recommended',
+    plugins: {
+      tailwindcss
+    },
     settings: {
-      react: {
-        version: 'detect'
+      tailwindcss: {
+        cssConfigPath: './src/app/globals.css'
       }
     },
     rules: {
-      ...prettier.configs.recommended.rules,
-      ...react.configs.recommended.rules,
-      ...a11y.configs.recommended.rules,
-      ...nextjs.configs.recommended.rules
+      ...tailwindcss.configs.recommended.rules,
     }
   },
   {
