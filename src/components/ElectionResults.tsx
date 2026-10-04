@@ -17,6 +17,7 @@ type Candidate = {
   pvap: string
   status: string
   votes: string
+  elected?: boolean
 }
 
 const CARGOS = [
@@ -151,7 +152,7 @@ function StateResults({ uf }: { uf: string }) {
                     <CandidateRow
                       key={`${c.key}-${cand.id}`}
                       c={cand}
-                      elected={false}
+                      elected={!!cand.elected}
                     />
                   ))
                 )}
@@ -197,7 +198,7 @@ export function ElectionResults({
     }
   }, [])
 
-  const winner = cands.find((c) => toNumber(c.pvap) > 50)
+  const winner = cands.find((c) => c.elected)
 
   return (
     <>
@@ -233,11 +234,11 @@ export function ElectionResults({
             {cands.map((c) => {
               const p = toNumber(c.pvap)
               return (
-                <CandidateRow
-                  key={c.id}
-                  c={c}
-                  elected={winner?.id === c.id}
-                />
+                    <CandidateRow
+                      key={c.id}
+                      c={c}
+                      elected={!!c.elected}
+                    />
               )
             })}
           </div>

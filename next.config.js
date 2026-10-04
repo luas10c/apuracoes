@@ -8,6 +8,13 @@ export default {
     root: import.meta.dirname,
   },
   images: {
-    qualities: [75, 80]
+    qualities: [75, 80],
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'resultados.tse.jus.br',
+        pathname: '/oficial/ele2026/**/fotos/**',
+      },
+    ],
   }
 }
