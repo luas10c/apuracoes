@@ -11,7 +11,14 @@ coverage
 
 .eslintcache
 
+*tsconfig.tsbuildinfo
+
+next-env.d.ts
+
 # env files
 .env*
 !.env.example
 .vercel
+
+# Cache local do agregado TSE (stale-while-revalidate, recriado sozinho)
+.tse-cache/

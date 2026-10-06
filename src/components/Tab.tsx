@@ -14,7 +14,7 @@ import {
   type Ref
 } from 'react'
 
-import { cn } from '#/utils/cn'
+import { cn } from 'tailwind-variants'
 
 /* -------------------------------------------------------------------------- */
 /*                                    Types                                   */

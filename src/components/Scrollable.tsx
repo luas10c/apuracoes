@@ -1,13 +1,13 @@
 'use client'
 
 import { useRef, useEffect } from 'react'
+import { cn } from 'tailwind-variants'
 
 import { OverlayScrollbars, ClickScrollPlugin } from 'overlayscrollbars'
 import 'overlayscrollbars/overlayscrollbars.css'
 
-import { Slot } from '#/components/atoms/slot'
+import { Slot } from '#/components/Slot'
 
-import { cn } from '#/utils/cn'
 
 // OverlayScrollbars plugins are registered globally and should only be set up once.
 OverlayScrollbars.plugin(ClickScrollPlugin)

@@ -23,12 +23,13 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "sharp": "^0.35.5",
-    "sonner": "^2.0.8"
+    "sonner": "^2.0.8",
+    "tailwind-variants": "^3.3.1"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.2.3",
     "@commitlint/config-conventional": "^21.2.3",
-    "@eslint-react/eslint-plugin": "^5.24.4",
+    "@eslint-react/eslint-plugin": "^5.24.6",
     "@eslint/js": "^10.0.1",
     "@jest/environment": "^30.5.2",
     "@jest/globals": "^30.5.2",
@@ -47,10 +48,10 @@
     "jest-mock-extended": "^4.0.1",
     "msw": "^3.0.2",
     "neostaged": "^0.2.0",
-    "postcss": "^8.5.28",
+    "postcss": "^8.5.29",
     "tailwindcss": "^4.3.3",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.71.0"
+    "typescript-eslint": "^8.71.1"
   },
   "license": "UNLICENSED"
 }

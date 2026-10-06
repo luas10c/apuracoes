@@ -1,58 +1,282 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
-import { Map } from '#/components/Map'
-import { ElectionResults } from '#/components/ElectionResults'
-import { SectionsSummary } from '#/components/SectionsSummary'
-import { GeneralStats } from '#/components/GeneralStats'
-import { TotalizationProgress } from '#/components/TotalizationProgress'
+import {
+  Map,
+  type ExteriorPlace,
+  type ExteriorSnapshot,
+  type MapMode,
+  type TseSnapshot
+} from '#/components/Map'
+import type { CommandPaletteItemData } from '#/components/CommandPalette'
+
+import { Header } from '#/components/Header'
+import { Footer } from '#/components/Footer'
+
+type MunIndexEntry = [number, string, string]
+
+function share(vap: number, vv: number | null): number {
+  if (!vv || vv <= 0) return 0
+  return Math.round((vap / vv) * 1000) / 10
+}
+
+function fmtPctShort(v: number): string {
+  return `${v.toFixed(1).replace('.', ',')}%`
+}
+
+function toTitle(name: string): string {
+  return name.toLowerCase().replace(/(?:^|\s|-')/g, (m) => m.toUpperCase())
+}
+
+/**
+ * Intervalo do polling ao vivo. 10s é inviável: cada revalidação no
+ * servidor agrega ~5,6k arquivos do TSE (~30-60s) e o TSE limita
+ * requisições em excesso (429). 60s mantém o mapa fresco sem bloqueios.
+ */
+const POLL_MS = 60_000
 
 export default function Home() {
   const [selected, setSelected] = useState<string | null>(null)
+  const [mode, setMode] = useState<MapMode>('brasil')
+  const [results, setResults] = useState<TseSnapshot | null>(null)
+  const [index, setIndex] = useState<MunIndexEntry[]>([])
+  const [loading, setLoading] = useState(true)
+  const [exterior, setExterior] = useState<ExteriorSnapshot | null>(null)
+  const [places, setPlaces] = useState<ExteriorPlace[]>([])
+  const [loadingExterior, setLoadingExterior] = useState(false)
+  const [exteriorLoaded, setExteriorLoaded] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+
+  // 1 único fetch live do agregado TSE, compartilhado entre mapa e busca.
+  useEffect(() => {
+    let alive = true
+    Promise.all([
+      fetch('/maps/municipalities-index.json').then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      }) as Promise<MunIndexEntry[]>,
+      fetch('/api/elections/municipalities', { cache: 'no-store' }).then(
+        (r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`)
+          return r.json()
+        }
+      ) as Promise<TseSnapshot>
+    ])
+      .then(([idx, snap]) => {
+        if (!alive) return
+        setIndex(idx)
+        setResults(snap)
+        setLoading(false)
+      })
+      .catch(() => {
+        if (!alive) return
+        setLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  // Polling ao vivo: busca de novo a cada POLL_MS, mas só atualiza o
+  // estado (e re-renderiza o mapa) se o hash do conteúdo mudou.
+  useEffect(() => {
+    if (loading) return
+    const tick = (url: string, apply: (snap: never) => void) => {
+      fetch(url, { cache: 'no-store' })
+        .then((r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`)
+          return r.json()
+        })
+        .then(apply)
+        .catch(() => {})
+    }
+    const id = window.setInterval(() => {
+      tick('/api/elections/municipalities', (snap: TseSnapshot) => {
+        setResults((prev) =>
+          prev && prev.meta.hash === snap.meta.hash ? prev : snap
+        )
+      })
+      if (exteriorLoaded) {
+        tick('/api/elections/exterior', (snap: ExteriorSnapshot) => {
+          setExterior((prev) =>
+            prev && prev.meta.hash === snap.meta.hash ? prev : snap
+          )
+        })
+      }
+    }, POLL_MS)
+    return () => window.clearInterval(id)
+  }, [loading, exteriorLoaded])
+
+  // Exterior sob demanda: só busca ao alternar o toggle (1ª vez).
+  useEffect(() => {
+    if (mode !== 'exterior' || exteriorLoaded) return
+    let alive = true
+    setLoadingExterior(true)
+    Promise.all([
+      fetch('/api/elections/exterior', { cache: 'no-store' }).then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      }) as Promise<ExteriorSnapshot>,
+      fetch('/maps/exterior-cities.json').then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      }) as Promise<ExteriorPlace[]>
+    ])
+      .then(([snap, coords]) => {
+        if (!alive) return
+        setExterior(snap)
+        setPlaces(coords)
+        setExteriorLoaded(true)
+        setLoadingExterior(false)
+      })
+      .catch(() => {
+        if (!alive) return
+        setLoadingExterior(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [mode, exteriorLoaded])
+
+  const handleMode = (next: MapMode) => {
+    setMode(next)
+    setSelected(null)
+    setSearchQuery('')
+    setSearchOpen(false)
+  }
+
+  // ESC global: reseta a busca, remove a seleção e volta o zoom do mapa.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      setSearchQuery('')
+      setSearchOpen(false)
+      setSelected(null)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
+
+  const items = useMemo<CommandPaletteItemData[]>(() => {
+    if (mode === 'exterior') {
+      const countryOf: Record<string, string> = Object.fromEntries(
+        places.map((p) => [p.tse, p.country] as const)
+      )
+      return Object.entries(exterior?.cidades ?? {}).map(([tse, city]) => {
+        const top1 = city.top[0]
+        const pct = top1 ? share(top1.vap, city.vv) : null
+        const accent =
+          !top1
+            ? undefined
+            : top1.sg === 'PL'
+              ? '#5b8def'
+              : top1.sg === 'PT'
+                ? '#f87171'
+                : '#9ca3af'
+        return {
+          value: tse,
+          label: toTitle(city.n || tse),
+          meta: countryOf[tse],
+          hint:
+            top1 && pct != null ? `${top1.sg} ${fmtPctShort(pct)}` : undefined,
+          accent,
+          keywords: top1
+            ? `${tse} ${top1.nmu} ${top1.sg} ${top1.n} ${countryOf[tse] ?? ''}`
+            : `${tse}`
+        }
+      })
+    }
+    const firstSq = results?.nacional.top[0]?.sq
+    const secondSq = results?.nacional.top[1]?.sq
+    return index.map(([code, name, uf]) => {
+      const city = results?.cidades[String(code)]
+      const top1 = city?.top[0]
+      const pct = top1 ? share(top1.vap, city?.vv ?? null) : null
+      const accent =
+        !top1 || !firstSq
+          ? undefined
+          : top1.sq === firstSq
+            ? '#5b8def'
+            : top1.sq === secondSq
+              ? '#f87171'
+              : '#9ca3af'
+      return {
+        value: String(code),
+        label: name,
+        meta: uf,
+        hint:
+          top1 && pct != null ? `${top1.sg} ${fmtPctShort(pct)}` : undefined,
+        accent,
+        keywords: top1
+          ? `${code} ${top1.nmu} ${top1.sg} ${top1.n}`
+          : `${code}`
+      }
+    })
+  }, [index, results, mode, exterior, places])
+
+  // PT x PL no exterior (cidades vencidas por cada um), como na referência.
+  const legend = useMemo(() => {
+    if (!exterior) return null
+    const [a, b] = exterior.total.top
+    if (!a) return null
+    const accentOf = (sg: string) =>
+      sg === 'PL' ? '#5b8def' : sg === 'PT' ? '#f87171' : '#9ca3af'
+    const wins: Record<string, number> = { [a.sq]: 0 }
+    if (b) wins[b.sq] = 0
+    for (const c of Object.values(exterior.cidades)) {
+      const sq = c.top[0]?.sq
+      if (sq && sq in wins) wins[sq]++
+    }
+    return [
+      { sg: a.sg, count: wins[a.sq] ?? 0, accent: accentOf(a.sg) },
+      ...(b ? [{ sg: b.sg, count: wins[b.sq] ?? 0, accent: accentOf(b.sg) }] : [])
+    ]
+  }, [exterior])
 
   return (
     <section className="mx-auto w-full max-w-7xl space-y-4 px-4">
-      <div className="border-royal-purple-500/40 flex items-center justify-between border-b p-4">
-        <span className="text-royal-purple-500 text-sm font-semibold tracking-widest uppercase">
-          Apuração ao vivo
-        </span>
-        <span className="text-woodsmoke-400 text-xs">
-          TSE · 4 de outubro de 2026
-        </span>
+      <Header
+        items={items}
+        results={results}
+        exterior={exterior}
+        loading={loading || (mode === 'exterior' && loadingExterior)}
+        handleSelected={(value) => setSelected(value)}
+        mode={mode}
+        searchQuery={searchQuery}
+        onSearchQueryChange={setSearchQuery}
+        searchOpen={searchOpen}
+        onSearchOpenChange={setSearchOpen}
+      />
+      <div className="relative">
+        <Map
+          key={mode}
+          mode={mode}
+          exterior={exterior}
+          onModeChange={handleMode}
+          selected={selected}
+          onSelect={setSelected}
+          results={results}
+        />
+        {mode === 'exterior' && legend && (
+          <div className="border-woodsmoke-700 bg-woodsmoke-900/90 pointer-events-none absolute top-3 right-3 z-20 rounded-xl border px-3 py-2 shadow-xl backdrop-blur">
+            <p className="flex items-center gap-2 text-xs font-bold whitespace-nowrap text-white tabular-nums">
+              {legend.map((l) => (
+                <span key={l.sg} className="inline-flex items-center gap-1">
+                  <i
+                    className="inline-block h-2 w-2 rounded-[2px]"
+                    style={{ backgroundColor: l.accent }}
+                  />
+                  {l.sg} {l.count}
+                </span>
+              ))}
+              <span className="text-woodsmoke-400 font-semibold">cidades</span>
+            </p>
+          </div>
+        )}
       </div>
-      <header className="border-royal-purple-500/40 bg-royal-purple-800/10 border-b">
-        <div className="px-4 py-5">
-          <TotalizationProgress />
-        </div>
-      </header>
-      <div className="border-royal-purple-500/40 border-b p-4">
-        <Map selected={selected} onSelect={setSelected} />
-      </div>
-      <ElectionResults selected={selected} />
-      {!selected && <GeneralStats />}
-
-      <div className="space-y-4 py-4">
-        <h2 className="text-woodsmoke-400 text-xs font-semibold uppercase">
-          Sobre a Apuração
-        </h2>
-        <div className="bg-woodsmoke-800 text-woodsmoke-400 space-y-2 rounded p-4 text-sm">
-          <p>
-            A apuração do primeiro turno das eleições presidenciais de 2026 foi
-            realizada pelo Tribunal Superior Eleitoral (TSE). O candidato é
-            declarado eleito quando obtém a maioria absoluta dos votos válidos
-            (mais de 50%) e não há possibilidade matemática de reversão com as
-            seções restantes.
-          </p>
-          <SectionsSummary />
-        </div>
-      </div>
-
-      <footer className="border-woodsmoke-800 border-t-2 py-4">
-        <p className="text-woodsmoke-400 text-xs">
-          Dados: Tribunal Superior Eleitoral · 4 de outubro de 2026
-        </p>
-      </footer>
+      <Footer />
     </section>
   )
 }
