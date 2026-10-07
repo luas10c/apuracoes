@@ -33,3 +33,31 @@
 body {
   @apply bg-woodsmoke-900 text-white min-h-screen antialiased;
 }
+
+/* Tema `.scrollbar` do OverlayScrollbars: track com fundo para dar
+   contraste no layout escuro + handle visível em todos os navegadores. */
+.os-theme-dark.scrollbar .os-scrollbar-track {
+  background-color: var(--color-woodsmoke-800);
+  border-radius: 9999px;
+}
+
+.os-theme-dark.scrollbar .os-scrollbar-handle {
+  background-color: var(--color-woodsmoke-500);
+  border-radius: 9999px;
+}
+
+.os-theme-dark.scrollbar .os-scrollbar-handle:hover {
+  background-color: var(--color-woodsmoke-400);
+}
+
+.os-theme-dark.scrollbar .os-scrollbar-handle:active {
+  background-color: var(--color-woodsmoke-300);
+}
+
+.os-theme-dark.scrollbar.os-scrollbar-vertical .os-scrollbar-track {
+  padding: 2px 0;
+}
+
+.os-theme-dark.scrollbar.os-scrollbar-horizontal .os-scrollbar-track {
+  padding: 0 2px;
+}

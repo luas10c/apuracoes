@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT_BR = join(ROOT, 'public', 'maps', 'tse-2026-1t-presidente.json')
 const OUT_ZZ = join(ROOT, 'public', 'maps', 'tse-exterior-2026-1t.json')
+const OUT_SEN = join(ROOT, 'public', 'maps', 'tse-senadores-2026-1t.json')
 
 const ELEICAO = '6257'
 const CARGO = '0001'
@@ -107,7 +108,7 @@ function extractAll(data) {
 
 function sectionsOf(data) {
   const s = data?.s ?? {}
-  return { ts: num(s.ts), st: num(s.st), pst: num(s.pst), vv: num(data?.v?.vv), vb: num(data?.v?.vb), vn: num(data?.v?.vn), te: num(data?.e?.te), a: num(data?.e?.a) }
+  return { ts: num(s.ts), st: num(s.st), pst: num(s.pst), vv: num(data?.v?.vv), vb: num(data?.v?.vb), vn: num(data?.v?.vn), tv: num(data?.v?.tv), te: num(data?.e?.te), a: num(data?.e?.a) }
 }
 
 function contentHash(cidades) {
@@ -260,6 +261,57 @@ async function writeEnvelope(path, payload) {
   await writeFile(path, JSON.stringify({ at: Date.now(), payload }))
 }
 
+function extractElected(data) {
+  const list = []
+  for (const agr of data?.carg?.[0]?.agr ?? []) {
+    for (const par of agr?.par ?? []) {
+      for (const c of par?.cand ?? []) {
+        const elected =
+          c.e === 's' || /^\s*eleito\b/i.test(String(c.st ?? ''))
+        if (!elected) continue
+        list.push({
+          nmu: String(c.nmu ?? c.nm ?? ''),
+          sg: String(par?.sg ?? ''),
+          n: String(par?.n ?? ''),
+          sq: String(c.sqcand),
+          vap: num(c.vap) ?? 0,
+          seq: Number(c.seq ?? 999)
+        })
+      }
+    }
+  }
+  list.sort((a, b) => a.seq - b.seq)
+  return list.map(({ seq: _seq, ...rest }) => rest)
+}
+
+async function aggregateSenators() {
+  const base = `https://resultados.tse.jus.br/oficial/ele2026/6259`
+  const files = await mapPool(UFS, 12, (uf) =>
+    getJSONRetry(`${base}/dados/${uf}/${uf}-c0005-e006259-u.json`)
+  )
+  const ufs = {}
+  files.forEach((r, i) => {
+    if (!r.ok) return
+    const uf = UFS[i].toUpperCase()
+    ufs[uf] = {
+      elected: extractElected(r.value),
+      hg: typeof r.value?.hg === 'string' ? r.value.hg : null,
+      sectionsPct: num(r.value?.s?.pst)
+    }
+  })
+  return {
+    meta: {
+      fonte: 'Tribunal Superior Eleitoral — resultados.tse.jus.br',
+      eleicao: '6259',
+      turno: 1,
+      cargo: 'Senador',
+      atualizadoEm: new Date().toISOString(),
+      fotos: `${base}/fotos/{uf}/{sqcand}.jpeg`
+    },
+    ufs
+  }
+}
+
 async function main() {
   const started = Date.now()
   try {
@@ -274,6 +326,12 @@ async function main() {
     await writeEnvelope(OUT_ZZ, zz)
     console.log(
       `[snapshot] exterior: ${Object.keys(zz.cidades).length} cidades, ${zz.meta.falhas} falhas`
+    )
+    console.log('[snapshot] agregando senadores…')
+    const sen = await aggregateSenators()
+    await writeEnvelope(OUT_SEN, sen)
+    console.log(
+      `[snapshot] senadores: ${Object.keys(sen.ufs).length} UFs`
     )
     console.log(`[snapshot] OK em ${Math.round((Date.now() - started) / 1000)}s`)
   } catch (err) {

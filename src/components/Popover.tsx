@@ -277,6 +277,26 @@ export function PopoverContent({
       const w = clampWidth ?? window.innerWidth
       const h = clampHeight ?? window.innerHeight
 
+      // Lado explícito (ex.: popover de badge, sempre à esquerda).
+      if (side === 'left' || side === 'right') {
+        const left =
+          side === 'left'
+            ? px - CONTENT_WIDTH - sideOffset
+            : px + sideOffset
+        let top = py - CONTENT_HEIGHT / 2
+        if (avoidCollisions) {
+          top = Math.max(8, Math.min(top, h - CONTENT_HEIGHT - 8))
+        }
+        setResolvedSide(side)
+        setCoords({
+          left: avoidCollisions
+            ? Math.max(8, Math.min(left, w - CONTENT_WIDTH - 8))
+            : left,
+          top
+        })
+        return
+      }
+
       // Flip horizontal/vertical para não estourar o container.
       const placeLeft = px > w - CONTENT_WIDTH - 24
       const placeAbove = py > h - CONTENT_HEIGHT - 24

@@ -52,7 +52,7 @@ export async function GET(request: Request) {
             image_url: `https://resultados.tse.jus.br/oficial/ele2026/${cfg.eleicao}/fotos/${cfg.eleicao === '6257' ? 'br' : uf}/${c.sqcand}.jpeg`,
             pvap: c.pvap,
             status: c.st || '',
-            elected: c.e === 's' || /eleito/i.test(c.st ?? ''),
+            elected: c.e === 's' || /^\s*eleito\b/i.test(c.st ?? ''),
             votes: c.vap
           })
         }

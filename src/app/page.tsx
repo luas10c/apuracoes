@@ -14,8 +14,12 @@ import type { CommandPaletteItemData } from '#/components/CommandPalette'
 import { MapFilters, type FilterCandidate } from '#/components/MapFilters'
 
 import { Header } from '#/components/Header'
-import { Footer } from '#/components/Footer'
 import { NationalStats, type NationalStatsData } from '#/components/NationalStats'
+import { RegionCard } from '#/components/RegionCard'
+import { LatestUpdates, type SenatorsSnapshot } from '#/components/LatestUpdates'
+import { RaceCard } from '#/components/RaceCard'
+import { TrendChart, type TrendPoint } from '#/components/TrendChart'
+import type { PastSnapshot } from '#/components/Map'
 
 type MunIndexEntry = [number, string, string]
 
@@ -53,6 +57,41 @@ export default function Home() {
   const [searchOpen, setSearchOpen] = useState(false)
   const [mapView, setMapView] = useState<MapView>('municipios')
   const [candidateSq, setCandidateSq] = useState<string | null>(null)
+  const [past, setPast] = useState<PastSnapshot | null>(null)
+  const [senators, setSenators] = useState<SenatorsSnapshot | null>(null)
+  const [series, setSeries] = useState<TrendPoint[]>(() => {
+    try {
+      if (typeof window === 'undefined') return []
+      const raw = window.localStorage.getItem('tse-series-6257')
+      const parsed: TrendPoint[] = raw ? JSON.parse(raw) : []
+      return Array.isArray(parsed) ? parsed.slice(-500) : []
+    } catch {
+      return []
+    }
+  })
+
+  // Série "ao longo da apuração": a cada snapshot novo (hash mudou),
+  // registra % seções + % dos 2 primeiros e persiste no navegador.
+  const resultsHash = results?.meta.hash
+  useEffect(() => {
+    if (!results) return
+    const [a, b] = results.nacional.top
+    if (!a || !b || !results.nacional.vv) return
+    const point: TrendPoint = {
+      t: Date.now(),
+      pst: results.nacional.pst,
+      a: Math.round((a.vap / results.nacional.vv) * 1000) / 10,
+      b: Math.round((b.vap / results.nacional.vv) * 1000) / 10
+    }
+    setSeries((prev) => {
+      const next = [...prev.slice(-499), point]
+      try {
+        window.localStorage.setItem('tse-series-6257', JSON.stringify(next))
+      } catch {}
+      return next
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resultsHash])
 
   // 1 único fetch live do agregado TSE, compartilhado entre mapa e busca.
   useEffect(() => {
@@ -114,7 +153,31 @@ export default function Home() {
     return () => window.clearInterval(id)
   }, [loading, exteriorLoaded])
 
-  // Exterior sob demanda: só busca ao alternar o toggle (1ª vez).
+  // 2022 estático + senadores ao vivo (cards laterais).
+  useEffect(() => {
+    let alive = true
+    fetch('/maps/ele2022-1t-presidente-top2.json')
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((snap: PastSnapshot) => {
+        if (alive) setPast(snap)
+      })
+      .catch(() => {})
+    fetch('/api/elections/senators', { cache: 'no-store' })
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((snap: SenatorsSnapshot) => {
+        if (alive) setSenators(snap)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
   useEffect(() => {
     if (mode !== 'exterior' || exteriorLoaded) return
     let alive = true
@@ -233,7 +296,16 @@ export default function Home() {
     }
   }, [mode, exterior, results])
 
-  const candidates = useMemo<FilterCandidate[]>(() => {    if (!results) return []
+  const trendNames = useMemo(() => {
+    const [a, b] = results?.nacional.top ?? []
+    const nameOf = (sq?: string) => {
+      const nmu = (sq && results?.candidatos?.[sq]?.nmu) || ''
+      return toTitle(nmu.split(' ')[0] || '')
+    }
+    return { a: nameOf(a?.sq) || '1º', b: nameOf(b?.sq) || '2º' }
+  }, [results])
+  const candidates = useMemo<FilterCandidate[]>(() => {
+    if (!results) return []
     const full = results.nacional.full ?? results.nacional.top.map((c) => ({ sq: c.sq, vap: 0 }))
     const vv = results.nacional.vv
     return full.map((c) => {
@@ -250,7 +322,7 @@ export default function Home() {
   }, [results])
 
   return (
-    <section className="mx-auto w-full max-w-7xl space-y-4 px-4">
+    <section className="w-full space-y-4 px-4 xl:px-6">
       <Header
         items={items}
         results={results}
@@ -279,18 +351,33 @@ export default function Home() {
         />
       )}
       {!loading && <NationalStats data={nationalTotals} />}
-      <Map
-        key={mode}
-        mode={mode}
-        exterior={exterior}
-        onModeChange={handleMode}
-        selected={selected}
-        onSelect={setSelected}
-        results={results}
-        mapView={mode === 'brasil' ? mapView : 'municipios'}
-        candidateSq={candidateSq}
-      />
-      <Footer />
+      <div className="grid items-start gap-4 xl:grid-cols-[320px_minmax(0,1fr)_320px]">
+        <aside className="order-2 space-y-4 xl:order-1">
+          <RaceCard results={results} />
+          <TrendChart
+            points={series}
+            nameA={trendNames.a}
+            nameB={trendNames.b}
+          />
+        </aside>
+        <div className="order-1 xl:order-2">
+          <Map
+            key={mode}
+            mode={mode}
+            exterior={exterior}
+            onModeChange={handleMode}
+            selected={selected}
+            onSelect={setSelected}
+            results={results}
+            mapView={mode === 'brasil' ? mapView : 'municipios'}
+            candidateSq={candidateSq}
+          />
+        </div>
+        <aside className="order-3 space-y-4">
+          <RegionCard results={results} past={past} exterior={exterior} />
+          <LatestUpdates senators={senators} />
+        </aside>
+      </div>
     </section>
   )
 }

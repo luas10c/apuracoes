@@ -131,6 +131,7 @@ export type TseSections = {
   vv: number | null
   vb: number | null
   vn: number | null
+  tv: number | null
   te: number | null
   a: number | null
 }
@@ -194,7 +195,8 @@ export type PastTopCandidate = {
 export type PastSnapshot = {
   meta: { fonte: string; ano: number; turno: number; cargo: string }
   cidades: Record<string, { top: PastTopCandidate[] }>
-  ufs: Record<string, { top: PastTopCandidate[] }>
+  ufs: Record<string, { top: PastTopCandidate[]; vv?: number | null }>
+  exterior?: Record<string, { top: PastTopCandidate[]; vv: number }>
 }
 
 let pastPromise: Promise<PastSnapshot | null> | null = null
@@ -244,6 +246,15 @@ function winnerByParty(sg: string): Winner {
 
 /** UFs com chamada lateral (como na imagem) em vez de rótulo interno. */
 const SIDE_UFS = ['RN', 'PB', 'PE', 'AL', 'SE', 'ES', 'RJ'] as const
+
+/** Layout vertical das badges laterais: NE junto, respiro antes do Sudeste. */
+const BADGE_NE_TOP = 140
+const BADGE_NE_GAP = 40
+const BADGE_SE_TOP = 384
+const BADGE_SE_GAP = 40
+const badgeY = (i: number) =>
+  i < 5 ? BADGE_NE_TOP + i * BADGE_NE_GAP : BADGE_SE_TOP + (i - 5) * BADGE_SE_GAP
+const GLOBE_Y = BADGE_SE_TOP + 2 * BADGE_SE_GAP + 44
 
 /* -------------------------------------------------------------------------- */
 /*                                 Geo helpers                                */
@@ -344,6 +355,22 @@ function clientToViewBox(
   const ox = (rect.width - VIEW_W * s) / 2
   const oy = (rect.height - VIEW_H * s) / 2
   return [(clientX - rect.left - ox) / s, (clientY - rect.top - oy) / s]
+}
+
+/** Ponto do viewBox -> coords relativas ao wrapper (âncora do popover). */
+function viewBoxToWrap(
+  svgRect: { left: number; top: number; width: number; height: number },
+  wrapRect: { left: number; top: number },
+  vx: number,
+  vy: number
+): [number, number] {
+  const s = Math.min(svgRect.width / VIEW_W, svgRect.height / VIEW_H)
+  const ox = (svgRect.width - VIEW_W * s) / 2
+  const oy = (svgRect.height - VIEW_H * s) / 2
+  return [
+    Math.round((svgRect.left - wrapRect.left + ox + vx * s) * 10) / 10,
+    Math.round((svgRect.top - wrapRect.top + oy + vy * s) * 10) / 10
+  ]
 }
 
 /** Tween com easeOutCubic; retorna função de cancelamento. */
@@ -659,6 +686,53 @@ function buildPast(
     .filter((v): v is { name: string; delta: number } => v !== null)
   if (pastCandidates.length === 0) return null
   return { year: 2022, candidates: pastCandidates, variation }
+}
+
+/** Resultado do estado a partir do agregado live (mesmo card do mapa). */
+function getStateResult(
+  snapshot: TseSnapshot,
+  past: PastSnapshot | null,
+  sigla: string,
+  stateFeatures: StateFeature[]
+): CityResult | null {
+  const place = snapshot.ufs[sigla]
+  const stateName =
+    stateFeatures.find((f) => f.properties.sigla === sigla)?.properties.nome ??
+    sigla
+  if (!place || place.top.length === 0) return null
+  const firstSq = snapshot.nacional.top[0]?.sq
+  const secondSq = snapshot.nacional.top[1]?.sq
+  const accentOf = (w: Winner) =>
+    w === 'flavio' ? '#5b8def' : w === 'lula' ? '#f87171' : '#9ca3af'
+  const candidates = place.top.slice(0, 2).map((t) => {
+    const winner = winnerOf(t.sq, firstSq, secondSq)
+    return {
+      name: toTitle(t.nmu),
+      party: `${t.sg} ${t.n}`.trim(),
+      number: t.n,
+      votes: t.vap,
+      pct: share(t.vap, place.vv),
+      photo: snapshot.meta.fotos.replace('{sqcand}', t.sq),
+      accent: accentOf(winner),
+      winner
+    }
+  })
+  return {
+    code: `UF:${sigla}`,
+    name: stateName,
+    uf: sigla,
+    sectionsPct: place.pst,
+    sectionsDone: place.st,
+    sectionsTotal: place.ts,
+    validVotes: place.vv,
+    brancos: place.vb ?? null,
+    nulos: place.vn ?? null,
+    abstencoes: place.a ?? null,
+    candidates,
+    past: buildPast(past?.ufs[sigla]?.top ?? null, candidates, (sg) =>
+      sg === 'PL' ? '#5b8def' : sg === 'PT' ? '#f87171' : '#9ca3af'
+    )
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1034,6 +1108,73 @@ function getExteriorCityResult(
   }
 }
 
+/**
+ * Agregado do voto no exterior (badge 🌐): top-2 do total ZZ,
+ * 2022 agregado por partido (PL 22 × PT 13) e variação em pontos.
+ */
+function getExteriorAggregateResult(
+  snapshot: ExteriorSnapshot,
+  past: PastSnapshot | null
+): CityResult | null {
+  const total = snapshot.total
+  if (!total || total.top.length === 0) return null
+  const accentOf = (w: Winner) =>
+    w === 'flavio' ? '#5b8def' : w === 'lula' ? '#f87171' : '#9ca3af'
+  const candidates = total.top.slice(0, 2).map((t) => {
+    const winner = winnerByParty(t.sg)
+    return {
+      name: toTitle(t.nmu),
+      party: `${t.sg} ${t.n}`.trim(),
+      number: t.n,
+      votes: t.vap,
+      pct: share(t.vap, total.vv),
+      photo: snapshot.meta.fotos.replace('{sqcand}', t.sq),
+      accent: accentOf(winner),
+      winner
+    }
+  })
+  // 2022 agregado: soma PL 22 + PT 13 sobre todas as cidades com dado.
+  let pastTop: PastTopCandidate[] | null = null
+  const ext = past?.exterior
+  if (ext) {
+    const sums: Record<string, { nmu: string; sg: string; n: string; vap: number }> = {}
+    let vv = 0
+    for (const entry of Object.values(ext)) {
+      vv += entry.vv ?? 0
+      for (const p of entry.top) {
+        if (p.n !== '22' && p.n !== '13') continue
+        const s = sums[p.n] ?? { nmu: p.nmu, sg: p.sg, n: p.n, vap: 0 }
+        s.vap += p.vap
+        sums[p.n] = s
+      }
+    }
+    if (vv > 0 && Object.keys(sums).length > 0) {
+      pastTop = Object.values(sums)
+        .sort((a, b) => b.vap - a.vap)
+        .map((s) => ({
+          ...s,
+          pct: Math.round((s.vap / vv) * 1000) / 10
+        }))
+    }
+  }
+  return {
+    code: 'ZZ',
+    name: 'Exterior',
+    uf: '🌐',
+    sectionsPct: total.pst,
+    sectionsDone: total.st,
+    sectionsTotal: total.ts,
+    validVotes: total.vv,
+    brancos: total.vb ?? null,
+    nulos: total.vn ?? null,
+    abstencoes: total.a ?? null,
+    candidates,
+    past: buildPast(pastTop, candidates, (sg) =>
+      sg === 'PL' ? '#5b8def' : sg === 'PT' ? '#f87171' : '#9ca3af'
+    )
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /*                                    Map                                     */
 /* -------------------------------------------------------------------------- */
@@ -1087,6 +1228,24 @@ function loadStates(): Promise<StateFeature[]> {
       .catch(() => [] as StateFeature[])
   }
   return statesPromise
+}
+
+let exteriorAggPromise: Promise<ExteriorSnapshot | null> | null = null
+
+/** Agregado do exterior p/ o popover do globo (lazy, 1 único fetch). */
+function loadExteriorAgg(): Promise<ExteriorSnapshot | null> {
+  if (!exteriorAggPromise) {
+    exteriorAggPromise = fetch('/api/elections/exterior', {
+      cache: 'no-store'
+    })
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((d) => d as ExteriorSnapshot)
+      .catch(() => null)
+  }
+  return exteriorAggPromise
 }
 
 let worldPromise: Promise<WorldFeature[]> | null = null
@@ -1150,6 +1309,17 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
   /** Controlado (via prop) ou interno: 1 única fonte de verdade. */
   const snapshot = results !== undefined ? results : internalResults
   const [hover, setHover] = useState<HoverState | null>(null)
+  /**
+   * Hover nas badges laterais/globo: { kind, sigla?, x, y } em coords do
+   * wrapper (âncora do popover). Independente do hover do mapa.
+   */
+  const [badgeHover, setBadgeHover] = useState<
+    | { kind: 'state'; sigla: string; x: number; y: number }
+    | { kind: 'globe'; x: number; y: number }
+    | null
+  >(null)
+  /** Agregado do exterior p/ o popover do globo (lazy, 1 fetch). */
+  const [globeData, setGlobeData] = useState<ExteriorSnapshot | null>(null)
   const [internalSelected, setInternalSelected] = useState<string | null>(
     selected ?? null
   )
@@ -1203,6 +1373,18 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
       alive = false
     }
   }, [])
+
+  // Cor da badge globo: agregado do exterior (lazy, 1 único fetch).
+  useEffect(() => {
+    if (mode !== 'brasil' || exterior || globeData) return
+    let alive = true
+    loadExteriorAgg().then((s) => {
+      if (alive && s) setGlobeData(s)
+    })
+    return () => {
+      alive = false
+    }
+  }, [mode, exterior, globeData])
 
   // Busca interna do agregado live — só no modo não-controlado.
   useEffect(() => {
@@ -1823,45 +2005,12 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     }
     if (!snapshot) return null
     if (hover.code.startsWith('UF:')) {
-      const sigla = hover.code.slice(3)
-      const place = snapshot.ufs[sigla]
-      const stateName =
-        stateFeatures.find((f) => f.properties.sigla === sigla)?.properties
-          .nome ?? sigla
-      if (!place || place.top.length === 0) return null
-      const firstSq = snapshot.nacional.top[0]?.sq
-      const secondSq = snapshot.nacional.top[1]?.sq
-      const accentOf = (w: Winner) =>
-        w === 'flavio' ? '#5b8def' : w === 'lula' ? '#f87171' : '#9ca3af'
-      const candidates = place.top.slice(0, 2).map((t) => {
-        const winner = winnerOf(t.sq, firstSq, secondSq)
-        return {
-          name: toTitle(t.nmu),
-          party: `${t.sg} ${t.n}`.trim(),
-          number: t.n,
-          votes: t.vap,
-          pct: share(t.vap, place.vv),
-          photo: snapshot.meta.fotos.replace('{sqcand}', t.sq),
-          accent: accentOf(winner),
-          winner
-        }
-      })
-      return {
-        code: hover.code,
-        name: stateName,
-        uf: sigla,
-        sectionsPct: place.pst,
-        sectionsDone: place.st,
-        sectionsTotal: place.ts,
-        validVotes: place.vv,
-        brancos: place.vb ?? null,
-        nulos: place.vn ?? null,
-        abstencoes: place.a ?? null,
-        candidates,
-        past: buildPast(past?.ufs[sigla]?.top ?? null, candidates, (sg) =>
-          sg === 'PL' ? '#5b8def' : sg === 'PT' ? '#f87171' : '#9ca3af'
-        )
-      }
+      return getStateResult(
+        snapshot,
+        past,
+        hover.code.slice(3),
+        stateFeatures
+      )
     }
     const info = nameIndex[hover.code]
     return getCityResult(
@@ -1872,6 +2021,86 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
       info?.u ?? hover.uf
     )
   }, [hover, mode, exterior, placeByTse, nameIndex, snapshot, past])
+
+  /** Popover das badges (estado ou globo): mesmo card do mapa. */
+  const badgeCity: CityResult | null = useMemo(() => {
+    if (!badgeHover) return null
+    if (badgeHover.kind === 'state') {
+      if (!snapshot) return null
+      return getStateResult(
+        snapshot,
+        past,
+        badgeHover.sigla,
+        stateFeatures
+      )
+    }
+    const snap = exterior ?? globeData
+    if (!snap) return null
+    return getExteriorAggregateResult(snap, past)
+  }, [badgeHover, snapshot, past, stateFeatures, exterior, globeData])
+
+  /** Âncora do popover a partir de um ponto do viewBox (badge lateral). */
+  const anchorBadgeAt = useCallback((vx: number, vy: number) => {
+    const svg = svgRef.current
+    const wrap = wrapRef.current
+    if (!svg || !wrap) return null
+    const [x, y] = viewBoxToWrap(
+      svg.getBoundingClientRect(),
+      wrap.getBoundingClientRect(),
+      vx,
+      vy
+    )
+    return { x, y }
+  }, [])
+
+  const handleBadgeEnter = useCallback(
+    (sigla: string, vy: number) => {
+      if (closeTimer.current) window.clearTimeout(closeTimer.current)
+      setHover(null)
+      const pos = anchorBadgeAt(796, vy)
+      if (!pos) return
+      setBadgeHover({ kind: 'state', sigla, x: pos.x, y: pos.y })
+    },
+    [anchorBadgeAt]
+  )
+
+  const handleGlobeEnter = useCallback(() => {
+    if (closeTimer.current) window.clearTimeout(closeTimer.current)
+    setHover(null)
+    const show = (snap: ExteriorSnapshot | null) => {
+      if (!snap) return
+      const pos = anchorBadgeAt(796, GLOBE_Y + 13)
+      if (!pos) return
+      setBadgeHover({ kind: 'globe', x: pos.x, y: pos.y })
+    }
+    const snap = exterior ?? globeData
+    if (snap) {
+      show(snap)
+      return
+    }
+    void loadExteriorAgg().then((s) => {
+      if (s) {
+        setGlobeData(s)
+        show(s)
+      }
+    })
+  }, [anchorBadgeAt, exterior, globeData])
+
+  const clearBadgeHover = useCallback(() => {
+    setBadgeHover(null)
+  }, [])
+
+  const handleBadgeActivate = useCallback(
+    (sigla: string) => {
+      setHover(null)
+      setBadgeHover(null)
+      setInternalSelected(sigla)
+      onSelect?.(sigla)
+      lastExternalZoom.current = sigla
+      zoomToState(sigla)
+    },
+    [onSelect, zoomToState]
+  )
 
   /** Overlay único da cidade em hover (substitui os 5,7k `<title>`). */
   const hoveredPath =
@@ -2214,7 +2443,7 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
   const badges = useMemo<SideBadge[]>(() => {
     if (mode !== 'brasil' || mapView === 'vantagem') return []
     return (SIDE_UFS as readonly string[]).flatMap((sigla, i) => {
-      const y = 150 + i * 40
+      const y = badgeY(i)
       if (mapView === 'apurado') {
         const pst = snapshot?.ufs[sigla]?.pst
         if (pst == null) return []
@@ -2247,7 +2476,7 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
         y
       }]
     })
-  }, [mode, view, snapshot, focusCand, ufCandShare, ufLive])
+  }, [mode, mapView, snapshot, focusCand, ufCandShare, ufLive])
 
   /** Badge Brasil (globo) por view. */
   const globeBadge = useMemo(() => {
@@ -2267,12 +2496,21 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
       }
     }
     if (ufLive?.nacionalPct == null) return null
+    // Cor do vencedor no exterior (vermelho PT / azul PL por margem).
+    const extTotal = (exterior ?? globeData)?.total
+    const extTop = extTotal?.top ?? []
+    const extWinner =
+      extTop.length > 0 ? winnerByParty(extTop[0].sg) : null
+    const extFill =
+      extWinner && extWinner !== 'outro'
+        ? fillFor(extWinner, marginOf(extTop, extTotal?.vv ?? null))
+        : '#713f12'
     return {
       text: `${Math.round(ufLive.nacionalPct)}%`,
-      fill: '#713f12',
+      fill: extFill,
       textFill: '#fff'
     }
-  }, [mode, view, snapshot, focusCand, ufLive])
+  }, [mode, mapView, snapshot, focusCand, ufLive, exterior, globeData])
 
   /**
    * Label do topo direito por modo (estrita às referências):
@@ -2444,9 +2682,12 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
       )}
 
       <Popover.Root
-        open={hover !== null}
+        open={hover !== null || badgeHover !== null}
         onOpenChange={(open) => {
-          if (!open) setHover(null)
+          if (!open) {
+            setHover(null)
+            setBadgeHover(null)
+          }
         }}
       >
         <svg
@@ -2651,7 +2892,15 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
           {(SIDE_UFS as readonly string[]).map((sigla, i) => {
             const anchor = stateAnchors[sigla]
             if (!anchor) return null
-            const y = 150 + i * 40
+            const y = badgeY(i)
+            // UF sob hover (mapa ou badge): linha branca p/ contraste.
+            const activeUf =
+              badgeHover?.kind === 'state'
+                ? badgeHover.sigla
+                : hover?.code.startsWith('UF:')
+                  ? hover.code.slice(3)
+                  : hover?.uf || null
+            const hot = activeUf === sigla
             return (
               <g key={`line-${sigla}`} pointerEvents="none">
                 <line
@@ -2659,17 +2908,17 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
                   y1={anchor.y}
                   x2={796}
                   y2={y + 13}
-                  stroke="#52525b"
-                  strokeWidth={1}
-                  strokeOpacity={0.8}
+                  stroke={hot ? '#fff' : '#52525b'}
+                  strokeWidth={hot ? 1.6 : 1}
+                  strokeOpacity={hot ? 1 : 0.8}
                 />
                 <circle
                   cx={anchor.x}
                   cy={anchor.y}
                   r={2.4}
                   fill="none"
-                  stroke="#a1a1aa"
-                  strokeWidth={1}
+                  stroke={hot ? '#fff' : '#a1a1aa'}
+                  strokeWidth={hot ? 1.6 : 1}
                 />
               </g>
             )
@@ -2815,8 +3064,28 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
 
           {/* Badges laterais (fiel à imagem). */}
           {mode === 'brasil' &&
-          badges.map((b) => (
-            <g key={`badge-${b.sigla}`} pointerEvents="none">
+          badges.map((b) => {
+            const hot =
+              badgeHover?.kind === 'state' && badgeHover.sigla === b.sigla
+            return (
+            <g
+              key={`badge-${b.sigla}`}
+              role="button"
+              tabIndex={0}
+              aria-label={`Ver ${b.sigla}`}
+              style={{ cursor: 'pointer', outline: 'none' }}
+              onMouseEnter={() => handleBadgeEnter(b.sigla, b.y + 13)}
+              onMouseLeave={clearBadgeHover}
+              onFocus={() => handleBadgeEnter(b.sigla, b.y + 13)}
+              onBlur={clearBadgeHover}
+              onClick={() => handleBadgeActivate(b.sigla)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  handleBadgeActivate(b.sigla)
+                }
+              }}
+            >
               <rect
                 x={800}
                 y={b.y}
@@ -2824,9 +3093,9 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
                 height={26}
                 rx={4}
                 fill={b.fill}
-                stroke={b.fill}
-                strokeOpacity={0.45}
-                strokeWidth={1}
+                stroke={hot ? '#fff' : b.fill}
+                strokeOpacity={hot ? 1 : 0.45}
+                strokeWidth={hot ? 1.6 : 1}
               />
               <text
                 x={812}
@@ -2848,28 +3117,44 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
                 {b.text}
               </text>
             </g>
-          ))}
+            )
+          })}
 
           {/* Badge Brasil (globo): conteúdo por view. */}
           {mode === 'brasil' && globeBadge && (
-          <g pointerEvents="none">
+          <g
+            role="button"
+            tabIndex={0}
+            aria-label="Ver voto no exterior"
+            style={{ cursor: 'pointer', outline: 'none' }}
+            onMouseEnter={handleGlobeEnter}
+            onMouseLeave={clearBadgeHover}
+            onFocus={handleGlobeEnter}
+            onBlur={clearBadgeHover}
+          >
             <rect
               x={800}
-              y={150 + SIDE_UFS.length * 40 + 6}
+              y={GLOBE_Y}
               width={92}
               height={26}
               rx={4}
-              fill={mapView === 'apurado' ? '#d6d6db' : '#713f12'}
-              stroke={mapView === 'apurado' ? '#d6d6db' : '#a16207'}
-              strokeOpacity={0.5}
-              strokeWidth={1}
+              fill={mapView === 'apurado' ? '#d6d6db' : (globeBadge?.fill ?? '#713f12')}
+              stroke={
+                badgeHover?.kind === 'globe'
+                  ? '#fff'
+                  : mapView === 'apurado'
+                    ? '#d6d6db'
+                    : (globeBadge?.fill ?? '#a16207')
+              }
+              strokeOpacity={badgeHover?.kind === 'globe' ? 1 : 0.5}
+              strokeWidth={badgeHover?.kind === 'globe' ? 1.6 : 1}
             />
-            <text x={812} y={150 + SIDE_UFS.length * 40 + 23} fontSize={12}>
+            <text x={812} y={GLOBE_Y + 17} fontSize={12}>
               🌐
             </text>
             <text
               x={880}
-              y={150 + SIDE_UFS.length * 40 + 23}
+              y={GLOBE_Y + 17}
               fill={mapView === 'apurado' ? '#1a1a1a' : '#fff'}
               fontSize={12}
               fontWeight={700}
@@ -2882,15 +3167,19 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
           </g>
         </svg>
 
-        {/* Popover de cidade no hover — composition reutilizável. */}
+        {/* Popover de cidade/estado no hover — composition reutilizável. */}
         <Popover.Content
-          x={hover?.x}
-          y={hover?.y}
+          x={hover?.x ?? badgeHover?.x}
+          y={hover?.y ?? badgeHover?.y}
+          side={!hover && badgeHover ? 'left' : undefined}
+          sideOffset={12}
           clampWidth={size.w || undefined}
           clampHeight={size.h || undefined}
           className="pointer-events-none"
         >
-          {hoverCity && <CityPopoverCard city={hoverCity} />}
+          {(hoverCity ?? badgeCity) && (
+            <CityPopoverCard city={(hoverCity ?? badgeCity)!} />
+          )}
         </Popover.Content>
       </Popover.Root>
 

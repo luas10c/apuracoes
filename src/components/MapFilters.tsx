@@ -4,7 +4,8 @@ import { useState } from 'react'
 
 import { cn } from 'tailwind-variants'
 
-import { Popover } from '#/components/Popover'
+import { Dropdown } from '#/components/Dropdown'
+import { Scrollable } from '#/components/Scrollable'
 import type { MapView } from '#/components/Map'
 
 export type FilterCandidate = {
@@ -96,11 +97,10 @@ export function MapFilters({
         </button>
       ))}
 
-      <Popover.Root>
-        <Popover.Trigger asChild>
+      <Dropdown.Root>
+        <Dropdown.Trigger asChild>
           <button
             type="button"
-            aria-haspopup="dialog"
             onClick={() => {
               if (view !== 'candidato') onViewChange('candidato')
             }}
@@ -119,40 +119,47 @@ export function MapFilters({
               ⌄
             </span>
           </button>
-        </Popover.Trigger>
-        <Popover.Content
+        </Dropdown.Trigger>
+        <Dropdown.Content
           side="bottom"
           align="start"
-          className="max-h-80 w-72 overflow-y-auto p-1.5"
+          className="w-72 p-1.5"
         >
+          <Dropdown.Label>Candidatos · Presidente 2026</Dropdown.Label>
+          <Scrollable aria-label="Candidatos" className="max-h-72">
           {candidates.map((c) => (
-            <button
+            <Dropdown.Item
               key={c.sq}
-              type="button"
-              onClick={() => onCandidateChange(c.sq)}
-              className={cn(
-                'flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors',
-                c.sq === candidateSq
-                  ? 'bg-woodsmoke-800'
-                  : 'hover:bg-woodsmoke-800/60'
-              )}
+              asChild
+              onSelect={() => onCandidateChange(c.sq)}
             >
-              <CandidateAvatar name={toTitle(c.nmu)} src={c.photo} />
-              <span className="min-w-0 flex-1 leading-tight">
-                <span className="text-woodsmoke-50 block truncate text-sm font-semibold">
-                  {toTitle(c.nmu)}
+              <button
+                type="button"
+                className={cn(
+                  'flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors',
+                  c.sq === candidateSq
+                    ? 'bg-woodsmoke-800'
+                    : 'hover:bg-woodsmoke-800/60'
+                )}
+              >
+                <CandidateAvatar name={toTitle(c.nmu)} src={c.photo} />
+                <span className="min-w-0 flex-1 leading-tight">
+                  <span className="text-woodsmoke-50 block truncate text-sm font-semibold">
+                    {toTitle(c.nmu)}
+                  </span>
+                  <span className="text-woodsmoke-400 block text-[11px]">
+                    {c.sg} {c.n}
+                  </span>
                 </span>
-                <span className="text-woodsmoke-400 block text-[11px]">
-                  {c.sg} {c.n}
+                <span className="text-woodsmoke-200 text-xs font-bold tabular-nums">
+                  {c.pct.toFixed(1).replace('.', ',')}%
                 </span>
-              </span>
-              <span className="text-woodsmoke-200 text-xs font-bold tabular-nums">
-                {c.pct.toFixed(1).replace('.', ',')}%
-              </span>
-            </button>
+              </button>
+            </Dropdown.Item>
           ))}
-        </Popover.Content>
-      </Popover.Root>
+          </Scrollable>
+        </Dropdown.Content>
+      </Dropdown.Root>
     </div>
   )
 }

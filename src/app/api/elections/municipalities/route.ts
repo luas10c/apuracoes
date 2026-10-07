@@ -151,6 +151,7 @@ function sectionsOf(data: unknown) {
     vv: num(d?.v?.vv),
     vb: num(d?.v?.vb),
     vn: num(d?.v?.vn),
+    tv: num(d?.v?.tv),
     te: num(d?.e?.te),
     a: num(d?.e?.a)
   }
