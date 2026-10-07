@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
+    "prebuild": "node scripts/snapshot-tse.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint --cache --concurrency=auto",

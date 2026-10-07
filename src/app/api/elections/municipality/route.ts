@@ -101,7 +101,12 @@ export async function GET(request: Request) {
       sections: {
         total: num(data?.s?.ts),
         done: num(data?.s?.st),
-        pct: num(data?.s?.pst)
+        pct: num(data?.s?.pst),
+        validos: num(data?.v?.vv),
+        brancos: num(data?.v?.vb),
+        nulos: num(data?.v?.vn),
+        eleitores: num(data?.e?.te),
+        abstencoes: num(data?.e?.a)
       },
       top: (top as unknown[]).slice(0, 2)
     })

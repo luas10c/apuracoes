@@ -6,11 +6,14 @@
  * (agregado nacional + 27 UFs + 5.571 municípios), compacta para top-2 por
  * localidade e responde em 1 único JSON.
  *
- * Estratégia (stale-while-revalidate em arquivo):
- * - O agregado é gravado em `.tse-cache/municipalities-6257-1t.json`.
+ * Estratégia (stale-while-revalidate):
+ * - Em produção (disco somente-leitura) o cache de runtime vive em
+ *   `/tmp/tse-cache` e um snapshot gerado no build
+ *   (`public/maps/tse-2026-1t-presidente.json`, via `npm run prebuild`)
+ *   garante primeira resposta instantânea.
  * - Cache fresco (< CACHE_TTL_MS): resposta imediata, sem tocar no TSE.
- * - Cache velho: responde o arquivo na hora e revalida em background.
- * - Sem arquivo (primeira carga): aguarda a agregação (~30-60s).
+ * - Cache velho/estático: responde na hora e revalida em background
+ *   (via `after()`, que sobrevive ao fim da resposta no serverless).
  * - `meta.hash` muda só quando os votos mudam → o client só re-renderiza
  *   se houver dado novo de verdade.
  *
@@ -20,7 +23,9 @@
  */
 export const dynamic = 'force-dynamic'
 
+import { after } from 'next/server'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const ELEICAO = '6257'
@@ -35,8 +40,15 @@ const UFS = [
 
 /** Janela em que o .json é servido sem tocar no TSE. */
 const CACHE_TTL_MS = 120_000
-const CACHE_DIR = join(process.cwd(), '.tse-cache')
+const CACHE_DIR = join(tmpdir(), 'tse-cache')
 const CACHE_FILE = join(CACHE_DIR, `municipalities-${ELEICAO}-1t.json`)
+/** Snapshot gerado no build (`npm run prebuild`) — fallback instantâneo. */
+const STATIC_FILE = join(
+  process.cwd(),
+  'public',
+  'maps',
+  `tse-2026-1t-presidente.json`
+)
 
 const CONCURRENCY = 24
 const UPSTREAM_TIMEOUT_MS = 15000
@@ -120,14 +132,27 @@ function extractTop(data: unknown, limit = 2) {
   return list.slice(0, limit)
 }
 
+/** Lista completa e compacta [[sq, vap], ...] para calor por candidato. */
+function extractAll(data: unknown): [string, number][] {
+  return extractTop(data, Number.MAX_SAFE_INTEGER).map((c) => [c.sq, c.vap])
+}
+
 function sectionsOf(data: unknown) {
-  const d = data as { s?: Record<string, unknown>; v?: Record<string, unknown> }
+  const d = data as {
+    s?: Record<string, unknown>
+    v?: Record<string, unknown>
+    e?: Record<string, unknown>
+  }
   const s = d?.s ?? {}
   return {
     ts: num(s.ts),
     st: num(s.st),
     pst: num(s.pst),
-    vv: num(d?.v?.vv)
+    vv: num(d?.v?.vv),
+    vb: num(d?.v?.vb),
+    vn: num(d?.v?.vn),
+    te: num(d?.e?.te),
+    a: num(d?.e?.a)
   }
 }
 
@@ -154,19 +179,24 @@ async function mapPool<T, R>(
 }
 
 export async function GET() {
-  const cached = await readCache()
-  if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
-    return Response.json({ ...cached.payload, meta: { ...cached.payload.meta, cached: true } })
+  const [tmp, statik] = await Promise.all([readCache(), readStatic()])
+  const fresh =
+    tmp && Date.now() - tmp.at < CACHE_TTL_MS ? tmp : null
+  if (fresh) {
+    return Response.json({ ...fresh.payload, meta: { ...fresh.payload.meta, cached: true } })
   }
-  if (cached) {
-    // Velho: responde na hora e revalida em background.
-    void refresh().catch(() => {})
+  // Melhor disponível (tmp velho ou snapshot do build): responde na hora
+  // e revalida em background — nunca prende a requisição na agregação fria.
+  const best =
+    tmp && statik ? (tmp.at >= statik.at ? tmp : statik) : (tmp ?? statik)
+  if (best) {
+    after(() => refresh().catch(() => {}))
     return Response.json({
-      ...cached.payload,
-      meta: { ...cached.payload.meta, cached: true, revalidating: true }
+      ...best.payload,
+      meta: { ...best.payload.meta, cached: true, revalidating: true }
     })
   }
-  // Primeira carga: sem arquivo, precisa agregar (lento, 1 única vez).
+  // Último recurso (sem nenhum arquivo): aguarda a agregação.
   try {
     const entry = await refresh()
     return Response.json({ ...entry.payload, meta: { ...entry.payload.meta, cached: false } })
@@ -178,6 +208,7 @@ export async function GET() {
 type Payload = {
   meta: Record<string, unknown>
   nacional: unknown
+  candidatos: Record<string, unknown>
   ufs: Record<string, unknown>
   cidades: Record<string, { top: { sq: string; vap: number }[] }>
 }
@@ -187,6 +218,18 @@ type CacheEntry = { at: number; payload: Payload }
 async function readCache(): Promise<CacheEntry | null> {
   try {
     const raw = await readFile(CACHE_FILE, 'utf-8')
+    const entry = JSON.parse(raw) as CacheEntry
+    if (!entry?.payload || typeof entry.at !== 'number') return null
+    return entry
+  } catch {
+    return null
+  }
+}
+
+/** Snapshot do build — sempre existe após `prebuild` bem-sucedido. */
+async function readStatic(): Promise<CacheEntry | null> {
+  try {
+    const raw = await readFile(STATIC_FILE, 'utf-8')
     const entry = JSON.parse(raw) as CacheEntry
     if (!entry?.payload || typeof entry.at !== 'number') return null
     return entry
@@ -258,6 +301,13 @@ async function aggregate(): Promise<Payload> {
       ufs[uf.toUpperCase()] = { ...(sectionsOf(r.value)), top: extractTop(r.value) }
     })
 
+    // Registro global de candidatos (nomes/partidos) + ranking nacional full.
+    const brFull = extractTop(brData, Number.MAX_SAFE_INTEGER)
+    const candidatos: Record<string, unknown> = {}
+    for (const c of brFull) {
+      candidatos[c.sq] = { nmu: c.nmu, sg: c.sg, n: c.n }
+    }
+
     const munFiles = await mapPool(jobs, CONCURRENCY, (j) =>
       getJSONRetry(
         `${BASE}/dados/${j.uf}/${j.uf}${j.tse}-c${CARGO}-e00${ELEICAO}-u.json`
@@ -277,7 +327,8 @@ async function aggregate(): Promise<Payload> {
         n: j.nome,
         uf: j.uf.toUpperCase(),
         ...(sectionsOf(r.value)),
-        top: extractTop(r.value)
+        top: extractTop(r.value),
+        all: extractAll(r.value)
       } as Payload['cidades'][string]
     })
 
@@ -293,7 +344,12 @@ async function aggregate(): Promise<Payload> {
         falhas,
         hash: contentHash(cidades)
       },
-      nacional: { ...(sectionsOf(brData)), top: extractTop(brData) },
+      nacional: {
+        ...(sectionsOf(brData)),
+        top: extractTop(brData),
+        full: brFull.map((c) => ({ sq: c.sq, vap: c.vap }))
+      },
+      candidatos,
       ufs,
       cidades
     }

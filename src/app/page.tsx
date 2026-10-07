@@ -7,12 +7,15 @@ import {
   type ExteriorPlace,
   type ExteriorSnapshot,
   type MapMode,
+  type MapView,
   type TseSnapshot
 } from '#/components/Map'
 import type { CommandPaletteItemData } from '#/components/CommandPalette'
+import { MapFilters, type FilterCandidate } from '#/components/MapFilters'
 
 import { Header } from '#/components/Header'
 import { Footer } from '#/components/Footer'
+import { NationalStats, type NationalStatsData } from '#/components/NationalStats'
 
 type MunIndexEntry = [number, string, string]
 
@@ -48,6 +51,8 @@ export default function Home() {
   const [exteriorLoaded, setExteriorLoaded] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
+  const [mapView, setMapView] = useState<MapView>('municipios')
+  const [candidateSq, setCandidateSq] = useState<string | null>(null)
 
   // 1 único fetch live do agregado TSE, compartilhado entre mapa e busca.
   useEffect(() => {
@@ -216,24 +221,33 @@ export default function Home() {
     })
   }, [index, results, mode, exterior, places])
 
-  // PT x PL no exterior (cidades vencidas por cada um), como na referência.
-  const legend = useMemo(() => {
-    if (!exterior) return null
-    const [a, b] = exterior.total.top
-    if (!a) return null
-    const accentOf = (sg: string) =>
-      sg === 'PL' ? '#5b8def' : sg === 'PT' ? '#f87171' : '#9ca3af'
-    const wins: Record<string, number> = { [a.sq]: 0 }
-    if (b) wins[b.sq] = 0
-    for (const c of Object.values(exterior.cidades)) {
-      const sq = c.top[0]?.sq
-      if (sq && sq in wins) wins[sq]++
+    const nationalTotals = useMemo<NationalStatsData | null>(() => {
+    const src = mode === 'exterior' ? exterior?.total : results?.nacional
+    if (!src) return null
+    return {
+      validos: src.vv,
+      brancos: src.vb,
+      nulos: src.vn,
+      abstencoes: src.a,
+      eleitores: src.te
     }
-    return [
-      { sg: a.sg, count: wins[a.sq] ?? 0, accent: accentOf(a.sg) },
-      ...(b ? [{ sg: b.sg, count: wins[b.sq] ?? 0, accent: accentOf(b.sg) }] : [])
-    ]
-  }, [exterior])
+  }, [mode, exterior, results])
+
+  const candidates = useMemo<FilterCandidate[]>(() => {    if (!results) return []
+    const full = results.nacional.full ?? results.nacional.top.map((c) => ({ sq: c.sq, vap: 0 }))
+    const vv = results.nacional.vv
+    return full.map((c) => {
+      const info = results.candidatos?.[c.sq]
+      return {
+        sq: c.sq,
+        nmu: info?.nmu ?? '',
+        sg: info?.sg ?? '',
+        n: info?.n ?? '',
+        pct: share(c.vap, vv),
+        photo: results.meta.fotos.replace('{sqcand}', c.sq)
+      }
+    })
+  }, [results])
 
   return (
     <section className="mx-auto w-full max-w-7xl space-y-4 px-4">
@@ -249,33 +263,33 @@ export default function Home() {
         searchOpen={searchOpen}
         onSearchOpenChange={setSearchOpen}
       />
-      <div className="relative">
-        <Map
-          key={mode}
-          mode={mode}
-          exterior={exterior}
-          onModeChange={handleMode}
-          selected={selected}
-          onSelect={setSelected}
-          results={results}
+      {mode === 'brasil' && (
+        <MapFilters
+          view={mapView}
+          onViewChange={(v) => {
+            setMapView(v)
+            if (v !== 'candidato') setCandidateSq(null)
+          }}
+          candidates={candidates}
+          candidateSq={candidateSq}
+          onCandidateChange={(sq) => {
+            setCandidateSq(sq)
+            setMapView('candidato')
+          }}
         />
-        {mode === 'exterior' && legend && (
-          <div className="border-woodsmoke-700 bg-woodsmoke-900/90 pointer-events-none absolute top-3 right-3 z-20 rounded-xl border px-3 py-2 shadow-xl backdrop-blur">
-            <p className="flex items-center gap-2 text-xs font-bold whitespace-nowrap text-white tabular-nums">
-              {legend.map((l) => (
-                <span key={l.sg} className="inline-flex items-center gap-1">
-                  <i
-                    className="inline-block h-2 w-2 rounded-[2px]"
-                    style={{ backgroundColor: l.accent }}
-                  />
-                  {l.sg} {l.count}
-                </span>
-              ))}
-              <span className="text-woodsmoke-400 font-semibold">cidades</span>
-            </p>
-          </div>
-        )}
-      </div>
+      )}
+      {!loading && <NationalStats data={nationalTotals} />}
+      <Map
+        key={mode}
+        mode={mode}
+        exterior={exterior}
+        onModeChange={handleMode}
+        selected={selected}
+        onSelect={setSelected}
+        results={results}
+        mapView={mode === 'brasil' ? mapView : 'municipios'}
+        candidateSq={candidateSq}
+      />
       <Footer />
     </section>
   )

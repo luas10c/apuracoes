@@ -5,14 +5,18 @@
  * Agrega os arquivos oficiais do TSE para a abrangência ZZ
  * (1 agregado + 186 cidades no exterior), compacta para top-2 por cidade
  * e responde em 1 único JSON. Mesma estratégia da rota municipalities:
- * stale-while-revalidate em `.tse-cache/exterior-6257-1t.json`.
+ * stale-while-revalidate (cache runtime em /tmp + snapshot do build em
+ * `public/maps/tse-exterior-2026-1t.json`, com refresh em background
+ * via `after()`).
  *
  * Coordenadas das cidades: `public/maps/exterior-cities.json`
  * (país + lon/lat por código TSE, curadoria a partir dos nomes oficiais).
  */
 export const dynamic = 'force-dynamic'
 
+import { after } from 'next/server'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const ELEICAO = '6257'
@@ -20,8 +24,15 @@ const CARGO = '0001'
 const BASE = `https://resultados.tse.jus.br/oficial/ele2026/${ELEICAO}`
 
 const CACHE_TTL_MS = 120_000
-const CACHE_DIR = join(process.cwd(), '.tse-cache')
+const CACHE_DIR = join(tmpdir(), 'tse-cache')
 const CACHE_FILE = join(CACHE_DIR, `exterior-${ELEICAO}-1t.json`)
+/** Snapshot gerado no build (`npm run prebuild`) — fallback instantâneo. */
+const STATIC_FILE = join(
+  process.cwd(),
+  'public',
+  'maps',
+  `tse-exterior-2026-1t.json`
+)
 
 const CONCURRENCY = 16
 const UPSTREAM_TIMEOUT_MS = 15000
@@ -99,13 +110,21 @@ function extractTop(data: unknown, limit = 2) {
 }
 
 function sectionsOf(data: unknown) {
-  const d = data as { s?: Record<string, unknown>; v?: Record<string, unknown> }
+  const d = data as {
+    s?: Record<string, unknown>
+    v?: Record<string, unknown>
+    e?: Record<string, unknown>
+  }
   const s = d?.s ?? {}
   return {
     ts: num(s.ts),
     st: num(s.st),
     pst: num(s.pst),
-    vv: num(d?.v?.vv)
+    vv: num(d?.v?.vv),
+    vb: num(d?.v?.vb),
+    vn: num(d?.v?.vn),
+    te: num(d?.e?.te),
+    a: num(d?.e?.a)
   }
 }
 
@@ -142,6 +161,18 @@ type CacheEntry = { at: number; payload: Payload }
 async function readCache(): Promise<CacheEntry | null> {
   try {
     const raw = await readFile(CACHE_FILE, 'utf-8')
+    const entry = JSON.parse(raw) as CacheEntry
+    if (!entry?.payload || typeof entry.at !== 'number') return null
+    return entry
+  } catch {
+    return null
+  }
+}
+
+/** Snapshot do build — sempre existe após `prebuild` bem-sucedido. */
+async function readStatic(): Promise<CacheEntry | null> {
+  try {
+    const raw = await readFile(STATIC_FILE, 'utf-8')
     const entry = JSON.parse(raw) as CacheEntry
     if (!entry?.payload || typeof entry.at !== 'number') return null
     return entry
@@ -242,15 +273,18 @@ async function aggregate(): Promise<Payload> {
 }
 
 export async function GET() {
-  const cached = await readCache()
-  if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
-    return Response.json({ ...cached.payload, meta: { ...cached.payload.meta, cached: true } })
+  const [tmp, statik] = await Promise.all([readCache(), readStatic()])
+  const fresh = tmp && Date.now() - tmp.at < CACHE_TTL_MS ? tmp : null
+  if (fresh) {
+    return Response.json({ ...fresh.payload, meta: { ...fresh.payload.meta, cached: true } })
   }
-  if (cached) {
-    void refresh().catch(() => {})
+  const best =
+    tmp && statik ? (tmp.at >= statik.at ? tmp : statik) : (tmp ?? statik)
+  if (best) {
+    after(() => refresh().catch(() => {}))
     return Response.json({
-      ...cached.payload,
-      meta: { ...cached.payload.meta, cached: true, revalidating: true }
+      ...best.payload,
+      meta: { ...best.payload.meta, cached: true, revalidating: true }
     })
   }
   try {
