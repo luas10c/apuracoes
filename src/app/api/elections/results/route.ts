@@ -1,13 +1,21 @@
+import {
+  pleitoPresidente,
+  type Turno
+} from '#/data/election'
+
 const num = (v: unknown) => {
   if (v == null || v === '') return null
   const n = Number(String(v).replace(',', '.'))
   return Number.isFinite(n) ? n : null
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const turno: Turno =
+    new URL(request.url).searchParams.get('turno') === '2' ? 2 : 1
+  const eleicao = pleitoPresidente(turno)
   try {
     const response = await fetch(
-      'https://resultados.tse.jus.br/oficial/ele2026/6257/dados/br/br-c0001-e006257-u.json',
+      `https://resultados.tse.jus.br/oficial/ele2026/${eleicao}/dados/br/br-c0001-e00${eleicao}-u.json`,
       { cache: 'no-store' }
     )
     if (!response.ok) {
@@ -30,10 +38,10 @@ export async function GET() {
             name: c.nmu ?? c.nm ?? '',
             name_vice: vice?.nmu ?? '',
             position: Number(c.seq),
-            image_url: `https://resultados.tse.jus.br/oficial/ele2026/6257/fotos/br/${c.sqcand}.jpeg`,
+            image_url: `https://resultados.tse.jus.br/oficial/ele2026/${eleicao}/fotos/br/${c.sqcand}.jpeg`,
             pvap: c.pvap,
             status: c.st || '',
-            elected: c.e === 's' || /^\s*eleito\b/i.test(c.st ?? ''),
+            elected: /^\s*eleit/i.test(c.st ?? ''),
             votes: c.vap
           })
         }

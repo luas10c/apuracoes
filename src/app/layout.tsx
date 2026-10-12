@@ -1,6 +1,7 @@
 import './globals.css'
 
-import { Inter } from 'next/font/google'
+import { Inter, Literata } from 'next/font/google'
+import { NuqsAdapter } from 'nuqs/adapters/next/app'
 import { Toaster } from 'sonner'
 import type { Metadata } from 'next/types'
 
@@ -18,11 +19,18 @@ const inter = Inter({
   display: 'swap'
 })
 
+const literata = Literata({
+  variable: '--font-literata',
+  weight: ['400'],
+  subsets: ['latin'],
+  display: 'swap'
+})
+
 export default function AppLayout({ children }: React.PropsWithChildren) {
   return (
-    <html lang="en" className={inter.className}>
+    <html lang="en" className={`${inter.variable} ${literata.variable}`}>
       <body>
-        {children}
+        <NuqsAdapter>{children}</NuqsAdapter>
         <Toaster
           position="top-center"
           toastOptions={{

@@ -16,22 +16,12 @@ import { cn } from 'tailwind-variants'
 import { Scrollable } from '#/components/Scrollable'
 import { Slot } from '#/components/Slot'
 
-/* -------------------------------------------------------------------------- */
-/*                                    Tipos                                   */
-/* -------------------------------------------------------------------------- */
-
 export type CommandPaletteItemData = {
-  /** Valor único devolvido em `onPick` (ex.: código IBGE do município). */
   value: string
-  /** Rótulo principal (ex.: nome do município). */
   label: string
-  /** Texto auxiliar à direita (ex.: UF). */
   meta?: string
-  /** Selo colorido à direita (ex.: sigla do partido + %). */
   hint?: string
-  /** Cor do selo (ex.: azul/vermelho do vencedor). */
   accent?: string
-  /** Texto extra pesquisável (ex.: código, partido, número). */
   keywords?: string
 }
 
@@ -69,10 +59,6 @@ function useCommandPaletteContext(component: string) {
   }
   return ctx
 }
-
-/* -------------------------------------------------------------------------- */
-/*                           Normalização + filtro                            */
-/* -------------------------------------------------------------------------- */
 
 function normalize(text: string): string {
   return text
@@ -113,10 +99,6 @@ export const filterCommandItems: CommandPaletteFilter = (
     .slice(0, limit)
     .map((s) => s.item)
 }
-
-/* -------------------------------------------------------------------------- */
-/*                            CommandPalette.Root                             */
-/* -------------------------------------------------------------------------- */
 
 export type CommandPaletteRootProps = {
   items: CommandPaletteItemData[]
@@ -202,7 +184,6 @@ export function CommandPaletteRoot({
     [onPick, clearOnPick, setQuery, setOpen]
   )
 
-  // Fecha ao clicar fora.
   useEffect(() => {
     if (!open) return
     const onPointer = (e: PointerEvent) => {
@@ -254,10 +235,6 @@ export function CommandPaletteRoot({
   )
 }
 
-/* -------------------------------------------------------------------------- */
-/*                            CommandPalette.Input                            */
-/* -------------------------------------------------------------------------- */
-
 export type CommandPaletteInputProps = React.ComponentProps<'input'> & {
   asChild?: boolean
 }
@@ -275,7 +252,6 @@ export function CommandPaletteInput({
     useCommandPaletteContext('CommandPalette.Input')
   const Component = asChild ? Slot : 'input'
 
-  // Ctrl/⌘+K foca a busca de qualquer lugar da página.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
@@ -351,10 +327,6 @@ export function CommandPaletteInput({
   )
 }
 
-/* -------------------------------------------------------------------------- */
-/*                           CommandPalette.Content                           */
-/* -------------------------------------------------------------------------- */
-
 export type CommandPaletteContentProps = React.ComponentProps<'div'> & {
   asChild?: boolean
 }
@@ -418,10 +390,6 @@ export function CommandPaletteContent({
   )
 }
 
-/* -------------------------------------------------------------------------- */
-/*                            CommandPalette.Group                            */
-/* -------------------------------------------------------------------------- */
-
 export type CommandPaletteGroupProps = React.ComponentProps<'div'> & {
   asChild?: boolean
   heading?: string
@@ -446,10 +414,6 @@ export function CommandPaletteGroup({
     </Component>
   )
 }
-
-/* -------------------------------------------------------------------------- */
-/*                            CommandPalette.List                             */
-/* -------------------------------------------------------------------------- */
 
 export type CommandPaletteListProps = Omit<
   React.ComponentProps<'ul'>,
@@ -544,10 +508,6 @@ export function CommandPaletteList({
   )
 }
 
-/* -------------------------------------------------------------------------- */
-/*                            CommandPalette.Empty                            */
-/* -------------------------------------------------------------------------- */
-
 export type CommandPaletteEmptyProps = React.ComponentProps<'div'> & {
   asChild?: boolean
 }
@@ -570,10 +530,6 @@ export function CommandPaletteEmpty({
     </Component>
   )
 }
-
-/* -------------------------------------------------------------------------- */
-/*                           CommandPalette.Footer                            */
-/* -------------------------------------------------------------------------- */
 
 export type CommandPaletteFooterProps = React.ComponentProps<'div'> & {
   asChild?: boolean
@@ -612,10 +568,6 @@ export function CommandPaletteFooter({
     </Component>
   )
 }
-
-/* -------------------------------------------------------------------------- */
-/*                                   Exports                                  */
-/* -------------------------------------------------------------------------- */
 
 export const CommandPalette = {
   Root: CommandPaletteRoot,

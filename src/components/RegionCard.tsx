@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react'
 import { cn } from 'tailwind-variants'
 
 import type { ExteriorSnapshot, PastSnapshot, TseSnapshot } from '#/components/Map'
+import { partyColor } from '#/data/parties'
 
 export const UF_NAMES: Record<string, string> = {
   AC: 'Acre', AL: 'Alagoas', AP: 'Amapá', AM: 'Amazonas', BA: 'Bahia',
@@ -38,7 +39,7 @@ function CandidateAvatar({ name, src }: { name: string; src: string }) {
     return (
       <span
         aria-hidden="true"
-        className="bg-woodsmoke-700 text-woodsmoke-200 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold"
+        className="bg-woodsmoke-700 text-woodsmoke-200 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold"
       >
         {initials || '?'}
       </span>
@@ -51,7 +52,7 @@ function CandidateAvatar({ name, src }: { name: string; src: string }) {
       alt={name}
       loading="lazy"
       onError={() => setFailed(true)}
-      className="bg-woodsmoke-700 h-7 w-7 shrink-0 rounded-full object-cover"
+      className="bg-woodsmoke-700 h-6 w-6 shrink-0 rounded-full object-cover"
     />
   )
 }
@@ -77,15 +78,10 @@ type RegionRow = {
 }
 
 function accentOfSg(sg: string): string {
-  if (sg === 'PL') return '#5b8def'
-  if (sg === 'PT') return '#f87171'
-  return '#9ca3af'
+  return partyColor(sg)
 }
 
-/**
- * Card "Por região": quem lidera para presidente em cada região,
- * com % das seções, foto do líder e variação vs 2022 (mesmo partido).
- */
+/** Card "Por região": líder por região, seções, foto e variação vs 2022. */
 export function RegionCard({
   results,
   past,
@@ -120,7 +116,6 @@ export function RegionCard({
       if (!sq) continue
       const info = results.candidatos?.[sq]
       const pct = Math.round((vap / vv) * 1000) / 10
-      // Variação vs 2022: mesmo partido (sg) somado nas UFs da região.
       let delta: number | null = null
       if (past && info?.sg) {
         let vap22 = 0
@@ -148,7 +143,6 @@ export function RegionCard({
         delta
       })
     }
-    // Linha do exterior (agregado ZZ ao vivo).
     if (exterior && exterior.total.top.length > 0) {
       const t0 = exterior.total.top[0]
       const info = results.candidatos?.[t0.sq]
@@ -178,22 +172,22 @@ export function RegionCard({
     <section
       aria-label="Apuração por região"
       className={cn(
-        'border-woodsmoke-800 bg-woodsmoke-900/80 rounded-2xl border p-4',
+        'border-woodsmoke-800 bg-woodsmoke-900/80 rounded-xl border p-3',
         className
       )}
     >
       <div className="flex items-baseline justify-between gap-2">
-        <h2 className="text-woodsmoke-50 text-sm font-bold">Por região</h2>
-        <p className="text-woodsmoke-400 text-[11px]">
+        <h2 className="text-woodsmoke-50 text-xs font-bold">Por região</h2>
+        <p className="text-woodsmoke-400 text-[10px]">
           Quem lidera para presidente
         </p>
       </div>
       <ul className="mt-2 divide-y divide-woodsmoke-800">
         {rows.map((r) => (
-          <li key={r.key} className="py-2.5 first:pt-1 last:pb-0">
-            <div className="flex items-center gap-2.5">
+          <li key={r.key} className="py-1 first:pt-0.5 last:pb-0">
+            <div className="flex items-center gap-2">
               <div className="min-w-0 flex-1 leading-tight">
-                <p className="text-woodsmoke-50 truncate text-sm font-bold">
+                <p className="text-woodsmoke-50 truncate text-[13px] font-bold">
                   {r.key === 'Exterior' ? '🌐 Exterior' : r.name}
                 </p>
                 <p className="text-woodsmoke-400 text-[11px] tabular-nums">
@@ -208,7 +202,7 @@ export function RegionCard({
                 >
                   {r.sg}
                 </span>{' '}
-                <span className="text-woodsmoke-50 text-sm font-bold">
+                <span className="text-woodsmoke-50 text-xs font-bold">
                   {fmtPct1(r.pct)}
                 </span>
                 {r.delta != null && (
@@ -228,7 +222,7 @@ export function RegionCard({
               </p>
             </div>
             <div
-              className="bg-woodsmoke-800 mt-1.5 h-1 overflow-hidden rounded-full"
+              className="bg-woodsmoke-800 mt-1 h-1 overflow-hidden rounded-full"
               role="img"
               aria-label={`${r.sg} ${fmtPct1(r.pct)} na região ${r.name}`}
             >

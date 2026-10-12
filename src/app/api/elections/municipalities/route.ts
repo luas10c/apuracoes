@@ -1,15 +1,16 @@
 /**
- * Agregado AO VIVO do TSE — Eleições 2026, 1º turno, Presidente (pleito 6257).
+ * Agregado AO VIVO do TSE — Eleições 2026, Presidente (pleito 6257 no 1T).
  *
- * GET /api/elections/municipalities
+ * GET /api/elections/municipalities?turno=1|2
  * O servidor busca os arquivos oficiais em resultados.tse.jus.br
  * (agregado nacional + 27 UFs + 5.571 municípios), compacta para top-2 por
- * localidade e responde em 1 único JSON.
+ * localidade e responde em 1 único JSON. Cache, snapshot e série são
+ * separados por turno (`-1t`/`-2t`) para nunca misturar os turnos.
  *
  * Estratégia (stale-while-revalidate):
  * - Em produção (disco somente-leitura) o cache de runtime vive em
  *   `/tmp/tse-cache` e um snapshot gerado no build
- *   (`public/maps/tse-2026-1t-presidente.json`, via `npm run prebuild`)
+ *   (`public/maps/tse-2026-{1t,2t}-presidente.json`, via `npm run prebuild`)
  *   garante primeira resposta instantânea.
  * - Cache fresco (< CACHE_TTL_MS): resposta imediata, sem tocar no TSE.
  * - Cache velho/estático: responde na hora e revalida em background
@@ -28,9 +29,27 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const ELEICAO = '6257'
-const CARGO = '0001'
-const BASE = `https://resultados.tse.jus.br/oficial/ele2026/${ELEICAO}`
+import {
+  pleitoPresidente,
+  turnoSuffix,
+  type Turno
+} from '#/data/election'
+
+function ctxFor(turno: Turno) {
+  const eleicao = pleitoPresidente(turno)
+  const sfx = turnoSuffix(turno)
+  return {
+    turno,
+    eleicao,
+    cargo: '0001',
+    base: `https://resultados.tse.jus.br/oficial/ele2026/${eleicao}`,
+    cacheFile: join(tmpdir(), 'tse-cache', `municipalities-${eleicao}-${sfx}.json`),
+    staticFile: join(process.cwd(), 'public', 'maps', `tse-2026-${sfx}-presidente.json`),
+    seriesFile: join(tmpdir(), 'tse-cache', `series-${eleicao}-${sfx}.json`)
+  }
+}
+
+type Ctx = ReturnType<typeof ctxFor>
 
 const UFS = [
   'ac', 'al', 'ap', 'am', 'ba', 'ce', 'df', 'es', 'go', 'ma', 'mt', 'ms',
@@ -41,14 +60,6 @@ const UFS = [
 /** Janela em que o .json é servido sem tocar no TSE. */
 const CACHE_TTL_MS = 120_000
 const CACHE_DIR = join(tmpdir(), 'tse-cache')
-const CACHE_FILE = join(CACHE_DIR, `municipalities-${ELEICAO}-1t.json`)
-/** Snapshot gerado no build (`npm run prebuild`) — fallback instantâneo. */
-const STATIC_FILE = join(
-  process.cwd(),
-  'public',
-  'maps',
-  `tse-2026-1t-presidente.json`
-)
 
 const CONCURRENCY = 24
 const UPSTREAM_TIMEOUT_MS = 15000
@@ -61,8 +72,7 @@ const num = (v: unknown) => {
 
 type Job = { uf: string; tse: string; ibge: string; nome: string }
 
-async function getJSON(url: string) {
-  const res = await fetch(url, {
+async function getJSON(url: string) {  const res = await fetch(url, {
     cache: 'no-store',
     signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     headers: { 'User-Agent': 'apuracoes/1.0 (+agregador ele2026)' }
@@ -84,9 +94,9 @@ async function getJSONRetry(url: string, retries = 2): Promise<unknown> {
   throw lastErr
 }
 
-async function loadJobs(): Promise<Job[]> {
+async function loadJobs(ctx: Ctx): Promise<Job[]> {
   const cm = (await getJSONRetry(
-    `${BASE}/config/mun-e00${ELEICAO}-cm.json`
+    `${ctx.base}/config/mun-e00${ctx.eleicao}-cm.json`
   )) as { abr?: { cd?: string; mu?: { cd?: string; cdi?: string | number; nm?: string }[] }[] }
   const jobs: Job[] = []
   for (const abr of cm?.abr ?? []) {
@@ -179,19 +189,24 @@ async function mapPool<T, R>(
   return out
 }
 
-export async function GET() {
-  const [tmp, statik] = await Promise.all([readCache(), readStatic()])
+export async function GET(request: Request) {
+  const turno: Turno =
+    new URL(request.url).searchParams.get('turno') === '2' ? 2 : 1
+  const ctx = ctxFor(turno)
+  const [tmp, statik] = await Promise.all([
+    readCache(ctx),
+    readStatic(ctx)
+  ])
   const fresh =
     tmp && Date.now() - tmp.at < CACHE_TTL_MS ? tmp : null
   if (fresh) {
     return Response.json({ ...fresh.payload, meta: { ...fresh.payload.meta, cached: true } })
   }
-  // Melhor disponível (tmp velho ou snapshot do build): responde na hora
-  // e revalida em background — nunca prende a requisição na agregação fria.
+  // Stale-while-revalidate: responde o melhor disponível e revalida em background.
   const best =
     tmp && statik ? (tmp.at >= statik.at ? tmp : statik) : (tmp ?? statik)
   if (best) {
-    after(() => refresh().catch(() => {}))
+    after(() => refresh(ctx).catch(() => {}))
     return Response.json({
       ...best.payload,
       meta: { ...best.payload.meta, cached: true, revalidating: true }
@@ -199,7 +214,7 @@ export async function GET() {
   }
   // Último recurso (sem nenhum arquivo): aguarda a agregação.
   try {
-    const entry = await refresh()
+    const entry = await refresh(ctx)
     return Response.json({ ...entry.payload, meta: { ...entry.payload.meta, cached: false } })
   } catch {
     return Response.json({ error: 'Falha ao buscar TSE' }, { status: 502 })
@@ -216,9 +231,9 @@ type Payload = {
 
 type CacheEntry = { at: number; payload: Payload }
 
-async function readCache(): Promise<CacheEntry | null> {
+async function readCache(ctx: Ctx): Promise<CacheEntry | null> {
   try {
-    const raw = await readFile(CACHE_FILE, 'utf-8')
+    const raw = await readFile(ctx.cacheFile, 'utf-8')
     const entry = JSON.parse(raw) as CacheEntry
     if (!entry?.payload || typeof entry.at !== 'number') return null
     return entry
@@ -228,9 +243,9 @@ async function readCache(): Promise<CacheEntry | null> {
 }
 
 /** Snapshot do build — sempre existe após `prebuild` bem-sucedido. */
-async function readStatic(): Promise<CacheEntry | null> {
+async function readStatic(ctx: Ctx): Promise<CacheEntry | null> {
   try {
-    const raw = await readFile(STATIC_FILE, 'utf-8')
+    const raw = await readFile(ctx.staticFile, 'utf-8')
     const entry = JSON.parse(raw) as CacheEntry
     if (!entry?.payload || typeof entry.at !== 'number') return null
     return entry
@@ -239,27 +254,77 @@ async function readStatic(): Promise<CacheEntry | null> {
   }
 }
 
-async function writeCache(entry: CacheEntry): Promise<void> {
+async function writeCache(ctx: Ctx, entry: CacheEntry): Promise<void> {
   await mkdir(CACHE_DIR, { recursive: true })
-  await writeFile(CACHE_FILE, JSON.stringify(entry))
+  await writeFile(ctx.cacheFile, JSON.stringify(entry))
 }
 
-/** Dedup: 1 única revalidação em voo (evita estouro no TSE). */
-let inflight: Promise<CacheEntry> | null = null
+/** Série "ao longo da apuração": 1 ponto por agregação com conteúdo novo. */
+const SERIES_MAX = 500
 
-function refresh(): Promise<CacheEntry> {
-  if (!inflight) {
-    inflight = aggregate()
-      .then(async (payload) => {
-        const entry = { at: Date.now(), payload }
-        await writeCache(entry).catch(() => {})
-        return entry
-      })
-      .finally(() => {
-        inflight = null
-      })
+export type SeriesPoint = {
+  t: number
+  pst: number | null
+  a: number
+  b: number
+}
+
+async function appendSeriesPoint(ctx: Ctx, nacional: unknown): Promise<void> {
+  const n = nacional as {
+    pst?: unknown
+    vv?: unknown
+    top?: { vap?: unknown }[]
   }
-  return inflight
+  const vv = Number(n?.vv) || 0
+  const [c1, c2] = n?.top ?? []
+  if (!vv || c1 == null || c2 == null) return
+  const pct = (vap: unknown) =>
+    Math.round((Number(vap) / vv) * 1000) / 10
+  const pstRaw = Number(n?.pst)
+  const point: SeriesPoint = {
+    t: Date.now(),
+    pst: Number.isFinite(pstRaw) ? Math.round(pstRaw * 10) / 10 : null,
+    a: pct(c1.vap),
+    b: pct(c2.vap)
+  }
+  let points: SeriesPoint[] = []
+  try {
+    const raw = await readFile(ctx.seriesFile, 'utf-8')
+    const parsed: unknown = JSON.parse(raw)
+    if (Array.isArray(parsed)) points = parsed as SeriesPoint[]
+  } catch {}
+  const last = points[points.length - 1]
+  if (
+    last &&
+    last.a === point.a &&
+    last.b === point.b &&
+    last.pst === point.pst
+  ) {
+    return
+  }
+  points = [...points.slice(-(SERIES_MAX - 1)), point]
+  await mkdir(CACHE_DIR, { recursive: true })
+  await writeFile(ctx.seriesFile, JSON.stringify(points))
+}
+
+/** Dedup por turno: 1 única revalidação em voo por turno (evita estouro no TSE). */
+const inflight = new Map<Turno, Promise<CacheEntry>>()
+
+function refresh(ctx: Ctx): Promise<CacheEntry> {
+  const running = inflight.get(ctx.turno)
+  if (running) return running
+  const p = aggregate(ctx)
+    .then(async (payload) => {
+      const entry = { at: Date.now(), payload }
+      await writeCache(ctx, entry).catch(() => {})
+      await appendSeriesPoint(ctx, payload.nacional).catch(() => {})
+      return entry
+    })
+    .finally(() => {
+      if (inflight.get(ctx.turno) === p) inflight.delete(ctx.turno)
+    })
+  inflight.set(ctx.turno, p)
+  return p
 }
 
 /** Hash do conteúdo (votos): só muda se a apuração andar de verdade. */
@@ -283,16 +348,16 @@ function contentHash(cidades: Payload['cidades']): string {
   return (h >>> 0).toString(16)
 }
 
-async function aggregate(): Promise<Payload> {
+async function aggregate(ctx: Ctx): Promise<Payload> {
   try {
-    const jobs = await loadJobs()
+    const jobs = await loadJobs(ctx)
 
     const brData = await getJSONRetry(
-      `${BASE}/dados/br/br-c${CARGO}-e00${ELEICAO}-u.json`
+      `${ctx.base}/dados/br/br-c${ctx.cargo}-e00${ctx.eleicao}-u.json`
     )
 
     const ufFiles = await mapPool(UFS, CONCURRENCY, (uf) =>
-      getJSONRetry(`${BASE}/dados/${uf}/${uf}-c${CARGO}-e00${ELEICAO}-u.json`)
+      getJSONRetry(`${ctx.base}/dados/${uf}/${uf}-c${ctx.cargo}-e00${ctx.eleicao}-u.json`)
     )
 
     const ufs: Record<string, unknown> = {}
@@ -311,7 +376,7 @@ async function aggregate(): Promise<Payload> {
 
     const munFiles = await mapPool(jobs, CONCURRENCY, (j) =>
       getJSONRetry(
-        `${BASE}/dados/${j.uf}/${j.uf}${j.tse}-c${CARGO}-e00${ELEICAO}-u.json`
+        `${ctx.base}/dados/${j.uf}/${j.uf}${j.tse}-c${ctx.cargo}-e00${ctx.eleicao}-u.json`
       )
     )
 
@@ -336,11 +401,11 @@ async function aggregate(): Promise<Payload> {
     return {
       meta: {
         fonte: 'Tribunal Superior Eleitoral — resultados.tse.jus.br',
-        eleicao: ELEICAO,
-        turno: 1,
+        eleicao: ctx.eleicao,
+        turno: ctx.turno,
         cargo: 'Presidente',
         atualizadoEm: new Date().toISOString(),
-        fotos: `${BASE}/fotos/br/{sqcand}.jpeg`,
+        fotos: `${ctx.base}/fotos/br/{sqcand}.jpeg`,
         totalMunicipios: jobs.length,
         falhas,
         hash: contentHash(cidades)

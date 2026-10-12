@@ -1,6 +1,8 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
+
+import { parseAsString, parseAsStringLiteral, useQueryState } from 'nuqs'
 
 import {
   Map,
@@ -12,14 +14,33 @@ import {
 } from '#/components/Map'
 import type { CommandPaletteItemData } from '#/components/CommandPalette'
 import { MapFilters, type FilterCandidate } from '#/components/MapFilters'
+import { partyColor, WINNER_COLORS } from '#/data/parties'
 
 import { Header } from '#/components/Header'
-import { NationalStats, type NationalStatsData } from '#/components/NationalStats'
+import { AdSlot } from '#/components/AdSlot'
+import { Scrollable } from '#/components/Scrollable'
+import { SenateScreen } from '#/components/SenateScreen'
+import { ElectionTotals } from '#/components/ElectionTotals'
+import {
+  GovernorsScreen,
+  type GovernorsSnapshot
+} from '#/components/GovernorsScreen'
+import {
+  DeputiesScreen,
+  type DeputiesSnapshot
+} from '#/components/DeputiesScreen'
+import { ExteriorSummaryCard } from '#/components/ExteriorSummaryCard'
+import { CountriesCard } from '#/components/CountriesCard'
 import { RegionCard } from '#/components/RegionCard'
 import { LatestUpdates, type SenatorsSnapshot } from '#/components/LatestUpdates'
 import { RaceCard } from '#/components/RaceCard'
 import { TrendChart, type TrendPoint } from '#/components/TrendChart'
 import type { PastSnapshot } from '#/components/Map'
+import {
+  pleitoPresidente,
+  turnoSuffix,
+  type Turno
+} from '#/data/election'
 
 type MunIndexEntry = [number, string, string]
 
@@ -44,8 +65,26 @@ function toTitle(name: string): string {
 const POLL_MS = 60_000
 
 export default function Home() {
-  const [selected, setSelected] = useState<string | null>(null)
-  const [mode, setMode] = useState<MapMode>('brasil')
+  return (
+    <Suspense fallback={<p className="text-woodsmoke-400 px-4 py-8 text-sm">Carregando apuração…</p>}>
+      <HomeContent />
+    </Suspense>
+  )
+}
+
+// useQueryState (nuqs) exige Suspense no prerender estático.
+function HomeContent() {
+  // Filtros espelhados na URL (deep-link + voltar do navegador).
+  const [selected, setSelected] = useQueryState(
+    'sel',
+    parseAsString.withOptions({ history: 'replace', scroll: false })
+  )
+  const [mode, setMode] = useQueryState(
+    'mode',
+    parseAsStringLiteral(['brasil', 'exterior'] as const)
+      .withDefault('brasil')
+      .withOptions({ history: 'replace', scroll: false })
+  )
   const [results, setResults] = useState<TseSnapshot | null>(null)
   const [index, setIndex] = useState<MunIndexEntry[]>([])
   const [loading, setLoading] = useState(true)
@@ -55,23 +94,92 @@ export default function Home() {
   const [exteriorLoaded, setExteriorLoaded] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
-  const [mapView, setMapView] = useState<MapView>('municipios')
-  const [candidateSq, setCandidateSq] = useState<string | null>(null)
+  const [mapView, setMapView] = useQueryState(
+    'view',
+    parseAsStringLiteral(
+      ['municipios', 'estados', 'vantagem', 'apurado', 'candidato'] as const
+    )
+      .withDefault('municipios')
+      .withOptions({ history: 'replace', scroll: false })
+  )
+  const [candidateSq, setCandidateSq] = useQueryState(
+    'cand',
+    parseAsString.withOptions({ history: 'replace', scroll: false })
+  )
+  const [cargo, setCargo] = useQueryState(
+    'cargo',
+    parseAsStringLiteral(
+      ['presidente', 'governadores', 'senado', 'deputados'] as const
+    )
+      .withDefault('presidente')
+      .withOptions({ history: 'replace', scroll: false })
+  )
+  const [turnoParam, setTurnoParam] = useQueryState(
+    'turno',
+    parseAsStringLiteral(['1', '2'] as const)
+      .withDefault('1')
+      .withOptions({ history: 'replace', scroll: false })
+  )
+  const turno: Turno = turnoParam === '2' ? 2 : 1
+  const pleito = pleitoPresidente(turno)
+  const seriesKey = `tse-series-${pleito}-${turnoSuffix(turno)}`
   const [past, setPast] = useState<PastSnapshot | null>(null)
   const [senators, setSenators] = useState<SenatorsSnapshot | null>(null)
-  const [series, setSeries] = useState<TrendPoint[]>(() => {
+  const [governors, setGovernors] = useState<GovernorsSnapshot | null>(null)
+  const [loadingGovernors, setLoadingGovernors] = useState(false)
+  const [deputies, setDeputies] = useState<DeputiesSnapshot | null>(null)
+  const [loadingDeputies, setLoadingDeputies] = useState(false)
+  const [series, setSeries] = useState<TrendPoint[]>([])
+  // Série persistida só após o mount (evita mismatch de hidratação).
+  // Junta a série do servidor (curva completa) com a local (este navegador).
+  // Chave e endpoint separados por turno para nunca misturar os turnos.
+  useEffect(() => {
+    let alive = true
+    let stored: TrendPoint[] = []
     try {
-      if (typeof window === 'undefined') return []
-      const raw = window.localStorage.getItem('tse-series-6257')
-      const parsed: TrendPoint[] = raw ? JSON.parse(raw) : []
-      return Array.isArray(parsed) ? parsed.slice(-500) : []
-    } catch {
-      return []
+      const raw = window.localStorage.getItem(seriesKey)
+      const parsed: unknown = raw ? JSON.parse(raw) : []
+      if (Array.isArray(parsed)) {
+        stored = parsed.filter(
+          (p): p is TrendPoint =>
+            typeof p === 'object' &&
+            p !== null &&
+            Number.isFinite((p as TrendPoint).t) &&
+            Number.isFinite((p as TrendPoint).a) &&
+            Number.isFinite((p as TrendPoint).b)
+        )
+      }
+    } catch {}
+    const merge = (server: TrendPoint[]) => {
+      const byTime: Record<number, TrendPoint> = {}
+      for (const p of [...server, ...stored]) byTime[p.t] = p
+      return Object.values(byTime)
+        .sort((x, y) => x.t - y.t)
+        .slice(-500)
     }
-  })
+    fetch(`/api/elections/series?turno=${turno}`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: unknown) => {
+        if (!alive) return
+        const server =
+          typeof d === 'object' && d !== null && Array.isArray((d as { points?: unknown }).points)
+            ? ((d as { points: TrendPoint[] }).points.filter((p) =>
+                Number.isFinite(p?.t)
+              ))
+            : []
+        const merged = merge(server)
+        if (merged.length > 0) setSeries(merged)
+        else if (stored.length > 0) setSeries(stored.slice(-500))
+      })
+      .catch(() => {
+        if (alive && stored.length > 0) setSeries(stored.slice(-500))
+      })
+    return () => {
+      alive = false
+    }
+  }, [turno, seriesKey])
 
-  // Série "ao longo da apuração": a cada snapshot novo (hash mudou),
-  // registra % seções + % dos 2 primeiros e persiste no navegador.
+  // Série "ao longo da apuração": novo snapshot registra % seções + top-2 e persiste.
   const resultsHash = results?.meta.hash
   useEffect(() => {
     if (!results) return
@@ -86,7 +194,7 @@ export default function Home() {
     setSeries((prev) => {
       const next = [...prev.slice(-499), point]
       try {
-        window.localStorage.setItem('tse-series-6257', JSON.stringify(next))
+        window.localStorage.setItem(seriesKey, JSON.stringify(next))
       } catch {}
       return next
     })
@@ -94,14 +202,18 @@ export default function Home() {
   }, [resultsHash])
 
   // 1 único fetch live do agregado TSE, compartilhado entre mapa e busca.
+  // Reexecuta ao trocar de turno (com reset do estado anterior).
   useEffect(() => {
     let alive = true
+    setLoading(true)
+    setResults(null)
+    setSeries([])
     Promise.all([
       fetch('/maps/municipalities-index.json').then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
       }) as Promise<MunIndexEntry[]>,
-      fetch('/api/elections/municipalities', { cache: 'no-store' }).then(
+      fetch(`/api/elections/municipalities?turno=${turno}`, { cache: 'no-store' }).then(
         (r) => {
           if (!r.ok) throw new Error(`HTTP ${r.status}`)
           return r.json()
@@ -121,7 +233,7 @@ export default function Home() {
     return () => {
       alive = false
     }
-  }, [])
+  }, [turno])
 
   // Polling ao vivo: busca de novo a cada POLL_MS, mas só atualiza o
   // estado (e re-renderiza o mapa) se o hash do conteúdo mudou.
@@ -137,13 +249,13 @@ export default function Home() {
         .catch(() => {})
     }
     const id = window.setInterval(() => {
-      tick('/api/elections/municipalities', (snap: TseSnapshot) => {
+      tick(`/api/elections/municipalities?turno=${turno}`, (snap: TseSnapshot) => {
         setResults((prev) =>
           prev && prev.meta.hash === snap.meta.hash ? prev : snap
         )
       })
       if (exteriorLoaded) {
-        tick('/api/elections/exterior', (snap: ExteriorSnapshot) => {
+        tick(`/api/elections/exterior?turno=${turno}`, (snap: ExteriorSnapshot) => {
           setExterior((prev) =>
             prev && prev.meta.hash === snap.meta.hash ? prev : snap
           )
@@ -151,7 +263,7 @@ export default function Home() {
       }
     }, POLL_MS)
     return () => window.clearInterval(id)
-  }, [loading, exteriorLoaded])
+  }, [loading, exteriorLoaded, turno])
 
   // 2022 estático + senadores ao vivo (cards laterais).
   useEffect(() => {
@@ -178,12 +290,59 @@ export default function Home() {
       alive = false
     }
   }, [])
+  // Governadores sob demanda (só quando a aba é aberta; por turno).
+  useEffect(() => {
+    if (cargo !== 'governadores' || governors) return
+    let alive = true
+    setLoadingGovernors(true)
+    fetch(`/api/elections/governors?turno=${turno}`, { cache: 'no-store' })
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((snap: GovernorsSnapshot) => {
+        if (alive) {
+          setGovernors(snap)
+          setLoadingGovernors(false)
+        }
+      })
+      .catch(() => {
+        if (alive) setLoadingGovernors(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [cargo, governors, turno])
+  // Deputados sob demanda (só quando a aba é aberta).
+  useEffect(() => {
+    if (cargo !== 'deputados' || deputies) return
+    let alive = true
+    setLoadingDeputies(true)
+    fetch('/api/elections/deputies', { cache: 'no-store' })
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((snap: DeputiesSnapshot) => {
+        if (alive) {
+          setDeputies(snap)
+          setLoadingDeputies(false)
+        }
+      })
+      .catch(() => {
+        if (alive) setLoadingDeputies(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [cargo, deputies])
   useEffect(() => {
     if (mode !== 'exterior' || exteriorLoaded) return
     let alive = true
     setLoadingExterior(true)
+    setExterior(null)
     Promise.all([
-      fetch('/api/elections/exterior', { cache: 'no-store' }).then((r) => {
+      fetch(`/api/elections/exterior?turno=${turno}`, { cache: 'no-store' }).then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
       }) as Promise<ExteriorSnapshot>,
@@ -206,13 +365,29 @@ export default function Home() {
     return () => {
       alive = false
     }
-  }, [mode, exteriorLoaded])
+  }, [mode, exteriorLoaded, turno])
 
   const handleMode = (next: MapMode) => {
     setMode(next)
     setSelected(null)
     setSearchQuery('')
     setSearchOpen(false)
+  }
+
+  // Troca de turno: reseta todos os dados dependentes do turno anterior.
+  const handleTurno = (next: '1' | '2') => {
+    if (next === turnoParam) return
+    setTurnoParam(next)
+    setSelected(null)
+    setCandidateSq(null)
+    setSearchQuery('')
+    setSearchOpen(false)
+    setResults(null)
+    setExterior(null)
+    setExteriorLoaded(false)
+    setGovernors(null)
+    setSeries([])
+    setLoading(true)
   }
 
   // ESC global: reseta a busca, remove a seleção e volta o zoom do mapa.
@@ -238,11 +413,7 @@ export default function Home() {
         const accent =
           !top1
             ? undefined
-            : top1.sg === 'PL'
-              ? '#5b8def'
-              : top1.sg === 'PT'
-                ? '#f87171'
-                : '#9ca3af'
+            : partyColor(top1.sg)
         return {
           value: tse,
           label: toTitle(city.n || tse),
@@ -266,10 +437,10 @@ export default function Home() {
         !top1 || !firstSq
           ? undefined
           : top1.sq === firstSq
-            ? '#5b8def'
+            ? WINNER_COLORS.flavio
             : top1.sq === secondSq
-              ? '#f87171'
-              : '#9ca3af'
+              ? WINNER_COLORS.lula
+              : WINNER_COLORS.outro
       return {
         value: String(code),
         label: name,
@@ -284,23 +455,11 @@ export default function Home() {
     })
   }, [index, results, mode, exterior, places])
 
-    const nationalTotals = useMemo<NationalStatsData | null>(() => {
-    const src = mode === 'exterior' ? exterior?.total : results?.nacional
-    if (!src) return null
-    return {
-      validos: src.vv,
-      brancos: src.vb,
-      nulos: src.vn,
-      abstencoes: src.a,
-      eleitores: src.te
-    }
-  }, [mode, exterior, results])
-
   const trendNames = useMemo(() => {
     const [a, b] = results?.nacional.top ?? []
     const nameOf = (sq?: string) => {
       const nmu = (sq && results?.candidatos?.[sq]?.nmu) || ''
-      return toTitle(nmu.split(' ')[0] || '')
+      return toTitle(String(nmu))
     }
     return { a: nameOf(a?.sq) || '1º', b: nameOf(b?.sq) || '2º' }
   }, [results])
@@ -322,7 +481,8 @@ export default function Home() {
   }, [results])
 
   return (
-    <section className="w-full space-y-4 px-4 xl:px-6">
+    <section className="flex w-full flex-col gap-3 px-4 xl:h-screen xl:overflow-hidden xl:px-6">
+      <AdSlot slot="topo" className="h-[72px] w-full shrink-0" />
       <Header
         items={items}
         results={results}
@@ -334,36 +494,33 @@ export default function Home() {
         onSearchQueryChange={setSearchQuery}
         searchOpen={searchOpen}
         onSearchOpenChange={setSearchOpen}
+        onModeChange={handleMode}
+        cargo={cargo}
+        onCargoChange={setCargo}
+        showSearch={cargo === 'presidente'}
+        turno={turno}
+        onTurnoChange={handleTurno}
       />
-      {mode === 'brasil' && (
-        <MapFilters
-          view={mapView}
-          onViewChange={(v) => {
-            setMapView(v)
-            if (v !== 'candidato') setCandidateSq(null)
-          }}
-          candidates={candidates}
-          candidateSq={candidateSq}
-          onCandidateChange={(sq) => {
-            setCandidateSq(sq)
-            setMapView('candidato')
-          }}
-        />
-      )}
-      {!loading && <NationalStats data={nationalTotals} />}
-      <div className="grid items-start gap-4 xl:grid-cols-[320px_minmax(0,1fr)_320px]">
-        <aside className="order-2 space-y-4 xl:order-1">
-          <RaceCard results={results} />
-          <TrendChart
-            points={series}
-            nameA={trendNames.a}
-            nameB={trendNames.b}
-          />
+      {cargo === 'presidente' ? (
+      <div className="grid flex-1 items-start gap-3 xl:min-h-0 xl:grid-cols-[300px_minmax(0,1fr)_300px] xl:items-stretch">
+        <aside className="order-2 xl:order-1 xl:min-h-0 xl:overflow-hidden">
+          <Scrollable aria-label="Disputa nacional" className="xl:h-full">
+            <div className="space-y-3">
+              <RaceCard results={results} turno={turno} />
+              <ElectionTotals results={results} />
+              <TrendChart
+                points={series}
+                nameA={trendNames.a}
+                nameB={trendNames.b}
+              />
+            </div>
+          </Scrollable>
         </aside>
-        <div className="order-1 xl:order-2">
+        <div className="order-1 xl:order-2 xl:min-h-0">
           <Map
-            key={mode}
+            key={`${mode}-${turno}`}
             mode={mode}
+            turno={turno}
             exterior={exterior}
             onModeChange={handleMode}
             selected={selected}
@@ -371,13 +528,76 @@ export default function Home() {
             results={results}
             mapView={mode === 'brasil' ? mapView : 'municipios'}
             candidateSq={candidateSq}
+            className="xl:h-full"
+            filters={
+              mode === 'brasil' ? (
+                <MapFilters
+                  view={mapView}
+                  onViewChange={(v) => {
+                    setMapView(v)
+                    if (v !== 'candidato') setCandidateSq(null)
+                  }}
+                  candidates={candidates}
+                  candidateSq={candidateSq}
+                  onCandidateChange={(sq) => {
+                    setCandidateSq(sq)
+                    setMapView('candidato')
+                  }}
+                />
+              ) : undefined
+            }
           />
         </div>
-        <aside className="order-3 space-y-4">
-          <RegionCard results={results} past={past} exterior={exterior} />
-          <LatestUpdates senators={senators} />
+        <aside className="order-3 xl:min-h-0 xl:overflow-hidden">
+          {mode === 'exterior' ? (
+            <div className="space-y-3 xl:flex xl:h-full xl:flex-col xl:space-y-3">
+              <ExteriorSummaryCard
+                exterior={exterior}
+                turno={turno}
+                onClose={() => setSelected(null)}
+              />
+              <CountriesCard exterior={exterior} places={places} />
+            </div>
+          ) : (
+          <div className="space-y-3 xl:flex xl:h-full xl:flex-col xl:space-y-3">
+            <RegionCard results={results} past={turno === 2 ? null : past} exterior={exterior} />
+            <LatestUpdates senators={senators} />
+          </div>
+          )}
         </aside>
       </div>
+      ) : cargo === 'senado' ? (
+        <SenateScreen
+          senators={senators}
+          right={<LatestUpdates senators={senators} />}
+        />
+      ) : cargo === 'governadores' ? (
+        <GovernorsScreen
+          data={governors}
+          loading={loadingGovernors}
+          turno={turno}
+          right={<LatestUpdates senators={senators} />}
+        />
+      ) : cargo === 'deputados' ? (
+        <DeputiesScreen
+          data={deputies}
+          loading={loadingDeputies}
+          senators={<LatestUpdates senators={senators} />}
+        />
+      ) : (
+        <section
+          aria-label="Deputados"
+          className="border-woodsmoke-800 bg-woodsmoke-900/80 rounded-xl border p-6 text-center"
+        >
+          <h2 className="text-woodsmoke-50 text-sm font-bold">
+            Deputados federais e estaduais
+          </h2>
+          <p className="text-woodsmoke-400 mx-auto mt-1 max-w-md text-xs">
+            A apuração proporcional (quociente eleitoral e sobras) ainda está
+            sendo integrada — esta tela entra no ar em breve.
+          </p>
+        </section>
+      )}
     </section>
   )
 }

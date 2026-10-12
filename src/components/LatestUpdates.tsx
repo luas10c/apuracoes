@@ -22,7 +22,13 @@ export type SenatorsSnapshot = {
   }
   ufs: Record<
     string,
-    { elected: SenatorElected[]; hg: string | null; sectionsPct: number | null }
+    {
+      elected: SenatorElected[]
+      top?: { sq: string; nmu: string; sg: string; n: string; vap: number }[]
+      vv?: number | null
+      hg: string | null
+      sectionsPct: number | null
+    }
   >
 }
 
@@ -41,7 +47,6 @@ function toTitle(name: string): string {
     .replace(/(?:^|\s|-|')(.)/g, (m) => m.toUpperCase())
 }
 
-/** "03:00:00" -> "03h00" (quando vier com data, ignora o resto). */
 function fmtHour(hg: string | null): string {
   if (!hg) return '–'
   const m = hg.match(/(\d{1,2}):(\d{2})/)
@@ -62,7 +67,7 @@ function FeedAvatar({ name, src }: { name: string; src: string }) {
     return (
       <span
         aria-hidden="true"
-        className="bg-woodsmoke-700 text-woodsmoke-200 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold"
+        className="bg-woodsmoke-700 text-woodsmoke-200 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold"
       >
         {initials || '?'}
       </span>
@@ -75,14 +80,14 @@ function FeedAvatar({ name, src }: { name: string; src: string }) {
       alt={name}
       loading="lazy"
       onError={() => setFailed(true)}
-      className="bg-woodsmoke-700 h-9 w-9 shrink-0 rounded-full object-cover"
+      className="bg-woodsmoke-700 h-7 w-7 shrink-0 rounded-full object-cover"
     />
   )
 }
 
 /**
- * Card "Últimas atualizações": senadores eleitos por UF a partir do
- * agregado ao vivo, ordenados pela hora de geração (`hg`) do TSE.
+ * Card "Últimas atualizações": senadores eleitos por UF, ordenados pela
+ * hora de geração (`hg`) do TSE.
  */
 export function LatestUpdates({
   senators,
@@ -125,22 +130,25 @@ export function LatestUpdates({
     <section
       aria-label="Últimas atualizações da apuração"
       className={cn(
-        'border-woodsmoke-800 bg-woodsmoke-900/80 rounded-2xl border p-4',
+        'border-woodsmoke-800 bg-woodsmoke-900/80 rounded-xl border p-3 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col',
         className
       )}
     >
-      <h2 className="text-woodsmoke-50 text-sm font-bold">
+      <h2 className="text-woodsmoke-50 shrink-0 text-xs font-bold">
         Últimas atualizações
       </h2>
-      <Scrollable aria-label="Atualizações" className="mt-1 max-h-72">
+      <Scrollable
+        aria-label="Atualizações"
+        className="mt-1 max-h-36 xl:max-h-none xl:min-h-0 xl:flex-1"
+      >
         <ul className="divide-y divide-woodsmoke-800">
           {items.map((item) => (
-            <li key={item.key} className="flex items-start gap-2.5 py-2.5">
-              <span className="text-woodsmoke-400 w-10 shrink-0 pt-1.5 text-[11px] tabular-nums">
+            <li key={item.key} className="flex items-start gap-2 py-1.5">
+              <span className="text-woodsmoke-400 w-10 shrink-0 pt-1 text-[11px] tabular-nums">
                 {item.time}
               </span>
               <FeedAvatar name={item.photoName} src={item.photo} />
-              <p className="text-woodsmoke-200 min-w-0 flex-1 text-[13px] leading-snug">
+              <p className="text-woodsmoke-200 min-w-0 flex-1 text-[11px] leading-snug">
                 {item.title}
               </p>
             </li>

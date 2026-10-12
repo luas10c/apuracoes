@@ -1,12 +1,12 @@
 /**
- * Voto no exterior AO VIVO — TSE 2026, 1º turno, Presidente (pleito 6257).
+ * Voto no exterior AO VIVO — TSE 2026, Presidente.
  *
- * GET /api/elections/exterior
+ * GET /api/elections/exterior?turno=1|2
  * Agrega os arquivos oficiais do TSE para a abrangência ZZ
  * (1 agregado + 186 cidades no exterior), compacta para top-2 por cidade
  * e responde em 1 único JSON. Mesma estratégia da rota municipalities:
  * stale-while-revalidate (cache runtime em /tmp + snapshot do build em
- * `public/maps/tse-exterior-2026-1t.json`, com refresh em background
+ * `public/maps/tse-exterior-2026-{1t,2t}.json`, com refresh em background
  * via `after()`).
  *
  * Coordenadas das cidades: `public/maps/exterior-cities.json`
@@ -19,20 +19,29 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const ELEICAO = '6257'
-const CARGO = '0001'
-const BASE = `https://resultados.tse.jus.br/oficial/ele2026/${ELEICAO}`
+import {
+  pleitoPresidente,
+  turnoSuffix,
+  type Turno
+} from '#/data/election'
+
+function ctxFor(turno: Turno) {
+  const eleicao = pleitoPresidente(turno)
+  const sfx = turnoSuffix(turno)
+  return {
+    turno,
+    eleicao,
+    cargo: '0001',
+    base: `https://resultados.tse.jus.br/oficial/ele2026/${eleicao}`,
+    cacheFile: join(tmpdir(), 'tse-cache', `exterior-${eleicao}-${sfx}.json`),
+    staticFile: join(process.cwd(), 'public', 'maps', `tse-exterior-2026-${sfx}.json`)
+  }
+}
+
+type Ctx = ReturnType<typeof ctxFor>
 
 const CACHE_TTL_MS = 120_000
 const CACHE_DIR = join(tmpdir(), 'tse-cache')
-const CACHE_FILE = join(CACHE_DIR, `exterior-${ELEICAO}-1t.json`)
-/** Snapshot gerado no build (`npm run prebuild`) — fallback instantâneo. */
-const STATIC_FILE = join(
-  process.cwd(),
-  'public',
-  'maps',
-  `tse-exterior-2026-1t.json`
-)
 
 const CONCURRENCY = 16
 const UPSTREAM_TIMEOUT_MS = 15000
@@ -68,9 +77,9 @@ async function getJSONRetry(url: string, retries = 2): Promise<unknown> {
   throw lastErr
 }
 
-async function loadJobs(): Promise<Job[]> {
+async function loadJobs(ctx: Ctx): Promise<Job[]> {
   const cm = (await getJSONRetry(
-    `${BASE}/config/mun-e00${ELEICAO}-cm.json`
+    `${ctx.base}/config/mun-e00${ctx.eleicao}-cm.json`
   )) as { abr?: { cd?: string; mu?: { cd?: string; nm?: string }[] }[] }
   const zz = (cm?.abr ?? []).find(
     (a) => String(a.cd ?? '').toLowerCase() === 'zz'
@@ -158,9 +167,9 @@ type Payload = {
 
 type CacheEntry = { at: number; payload: Payload }
 
-async function readCache(): Promise<CacheEntry | null> {
+async function readCache(ctx: Ctx): Promise<CacheEntry | null> {
   try {
-    const raw = await readFile(CACHE_FILE, 'utf-8')
+    const raw = await readFile(ctx.cacheFile, 'utf-8')
     const entry = JSON.parse(raw) as CacheEntry
     if (!entry?.payload || typeof entry.at !== 'number') return null
     return entry
@@ -170,9 +179,9 @@ async function readCache(): Promise<CacheEntry | null> {
 }
 
 /** Snapshot do build — sempre existe após `prebuild` bem-sucedido. */
-async function readStatic(): Promise<CacheEntry | null> {
+async function readStatic(ctx: Ctx): Promise<CacheEntry | null> {
   try {
-    const raw = await readFile(STATIC_FILE, 'utf-8')
+    const raw = await readFile(ctx.staticFile, 'utf-8')
     const entry = JSON.parse(raw) as CacheEntry
     if (!entry?.payload || typeof entry.at !== 'number') return null
     return entry
@@ -181,26 +190,28 @@ async function readStatic(): Promise<CacheEntry | null> {
   }
 }
 
-async function writeCache(entry: CacheEntry): Promise<void> {
+async function writeCache(ctx: Ctx, entry: CacheEntry): Promise<void> {
   await mkdir(CACHE_DIR, { recursive: true })
-  await writeFile(CACHE_FILE, JSON.stringify(entry))
+  await writeFile(ctx.cacheFile, JSON.stringify(entry))
 }
 
-let inflight: Promise<CacheEntry> | null = null
+/** Dedup por turno: 1 única revalidação em voo por turno. */
+const inflight = new Map<Turno, Promise<CacheEntry>>()
 
-function refresh(): Promise<CacheEntry> {
-  if (!inflight) {
-    inflight = aggregate()
-      .then(async (payload) => {
-        const entry = { at: Date.now(), payload }
-        await writeCache(entry).catch(() => {})
-        return entry
-      })
-      .finally(() => {
-        inflight = null
-      })
-  }
-  return inflight
+function refresh(ctx: Ctx): Promise<CacheEntry> {
+  const running = inflight.get(ctx.turno)
+  if (running) return running
+  const p = aggregate(ctx)
+    .then(async (payload) => {
+      const entry = { at: Date.now(), payload }
+      await writeCache(ctx, entry).catch(() => {})
+      return entry
+    })
+    .finally(() => {
+      if (inflight.get(ctx.turno) === p) inflight.delete(ctx.turno)
+    })
+  inflight.set(ctx.turno, p)
+  return p
 }
 
 function contentHash(cidades: Payload['cidades']): string {
@@ -223,17 +234,17 @@ function contentHash(cidades: Payload['cidades']): string {
   return (h >>> 0).toString(16)
 }
 
-async function aggregate(): Promise<Payload> {
+async function aggregate(ctx: Ctx): Promise<Payload> {
   try {
-    const jobs = await loadJobs()
+    const jobs = await loadJobs(ctx)
 
     const zzData = await getJSONRetry(
-      `${BASE}/dados/zz/zz-c${CARGO}-e00${ELEICAO}-u.json`
+      `${ctx.base}/dados/zz/zz-c${ctx.cargo}-e00${ctx.eleicao}-u.json`
     )
 
     const cityFiles = await mapPool(jobs, CONCURRENCY, (j) =>
       getJSONRetry(
-        `${BASE}/dados/zz/zz${j.tse}-c${CARGO}-e00${ELEICAO}-u.json`
+        `${ctx.base}/dados/zz/zz${j.tse}-c${ctx.cargo}-e00${ctx.eleicao}-u.json`
       )
     )
 
@@ -255,11 +266,11 @@ async function aggregate(): Promise<Payload> {
     return {
       meta: {
         fonte: 'Tribunal Superior Eleitoral — resultados.tse.jus.br',
-        eleicao: ELEICAO,
-        turno: 1,
+        eleicao: ctx.eleicao,
+        turno: ctx.turno,
         cargo: 'Presidente',
         atualizadoEm: new Date().toISOString(),
-        fotos: `${BASE}/fotos/br/{sqcand}.jpeg`,
+        fotos: `${ctx.base}/fotos/br/{sqcand}.jpeg`,
         totalCidades: jobs.length,
         falhas,
         hash: contentHash(cidades)
@@ -272,8 +283,14 @@ async function aggregate(): Promise<Payload> {
   }
 }
 
-export async function GET() {
-  const [tmp, statik] = await Promise.all([readCache(), readStatic()])
+export async function GET(request: Request) {
+  const turno: Turno =
+    new URL(request.url).searchParams.get('turno') === '2' ? 2 : 1
+  const ctx = ctxFor(turno)
+  const [tmp, statik] = await Promise.all([
+    readCache(ctx),
+    readStatic(ctx)
+  ])
   const fresh = tmp && Date.now() - tmp.at < CACHE_TTL_MS ? tmp : null
   if (fresh) {
     return Response.json({ ...fresh.payload, meta: { ...fresh.payload.meta, cached: true } })
@@ -281,14 +298,14 @@ export async function GET() {
   const best =
     tmp && statik ? (tmp.at >= statik.at ? tmp : statik) : (tmp ?? statik)
   if (best) {
-    after(() => refresh().catch(() => {}))
+    after(() => refresh(ctx).catch(() => {}))
     return Response.json({
       ...best.payload,
       meta: { ...best.payload.meta, cached: true, revalidating: true }
     })
   }
   try {
-    const entry = await refresh()
+    const entry = await refresh(ctx)
     return Response.json({ ...entry.payload, meta: { ...entry.payload.meta, cached: false } })
   } catch {
     return Response.json({ error: 'Falha ao buscar TSE' }, { status: 502 })

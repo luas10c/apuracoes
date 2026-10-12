@@ -8,8 +8,6 @@ import 'overlayscrollbars/overlayscrollbars.css'
 
 import { Slot } from '#/components/Slot'
 
-
-// OverlayScrollbars plugins are registered globally and should only be set up once.
 OverlayScrollbars.plugin(ClickScrollPlugin)
 
 export function Scrollable({
@@ -59,10 +57,21 @@ export function Scrollable({
       ref={ref}
       role="region"
       aria-label="Scrollable"
-      className={cn('relative isolate min-h-0 min-w-0 overflow-hidden pr-1', className, 'overflow-hidden')}
+      className={cn(
+        'relative isolate min-h-0 min-w-0 overflow-hidden pr-3',
+        orientation !== 'vertical' && 'pb-3',
+        className
+      )}
       {...props}
     >
-      <div className="min-h-0 min-w-0">{children}</div>
+      <div
+        className={cn(
+          'min-h-0 min-w-0 mr-2',
+          orientation !== 'vertical' && 'mb-2'
+        )}
+      >
+        {children}
+      </div>
     </Component>
   )
 }

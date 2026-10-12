@@ -4,6 +4,9 @@ import { useState } from 'react'
 
 import { cn } from 'tailwind-variants'
 
+import { Scrollable } from '#/components/Scrollable'
+import { partyColor } from '#/data/parties'
+import { turnoLabel, type Turno } from '#/data/election'
 import type { TseSnapshot } from '#/components/Map'
 
 function toTitle(name: string): string {
@@ -16,6 +19,10 @@ function fmtPct(v: number): string {
   return `${v.toFixed(2).replace('.', ',')}%`
 }
 
+function fmtPct1(v: number): string {
+  return `${v.toFixed(1).replace('.', ',')}%`
+}
+
 function fmtInt(v: number | null): string {
   if (v == null) return '–'
   return v.toLocaleString('pt-BR')
@@ -26,8 +33,27 @@ function fmtMilhoes(votes: number): string {
   return `${mi.toFixed(1).replace('.', ',')} milhões de votos`
 }
 
-function CandidateAvatar({ name, src }: { name: string; src: string }) {
+function fmtHourMin(iso: unknown): string | null {
+  if (typeof iso !== 'string' || !iso) return null
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  return `${d.getHours()}h${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function CandidateAvatar({
+  name,
+  src,
+  size = 'sm'
+}: {
+  name: string
+  src: string
+  size?: 'sm' | 'lg'
+}) {
   const [failed, setFailed] = useState(false)
+  const cls =
+    size === 'lg'
+      ? 'h-10 w-10 rounded-lg text-xs'
+      : 'h-8 w-8 rounded-full text-[10px]'
   if (failed) {
     const initials = name
       .split(' ')
@@ -39,7 +65,10 @@ function CandidateAvatar({ name, src }: { name: string; src: string }) {
     return (
       <span
         aria-hidden="true"
-        className="bg-woodsmoke-700 text-woodsmoke-200 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold"
+        className={cn(
+          'bg-woodsmoke-700 text-woodsmoke-200 flex shrink-0 items-center justify-center font-bold',
+          cls
+        )}
       >
         {initials || '?'}
       </span>
@@ -52,26 +81,24 @@ function CandidateAvatar({ name, src }: { name: string; src: string }) {
       alt={name}
       loading="lazy"
       onError={() => setFailed(true)}
-      className="bg-woodsmoke-700 h-9 w-9 shrink-0 rounded-full object-cover"
+      className={cn('bg-woodsmoke-700 shrink-0 object-cover', cls)}
     />
   )
 }
 
+/** Cor do partido pela sigla (módulo central `#/data/parties`). */
 function accentOfSg(sg: string): string {
-  if (sg === 'PL') return '#5b8def'
-  if (sg === 'PT') return '#f87171'
-  return '#9ca3af'
+  return partyColor(sg)
 }
 
-/**
- * Card da disputa nacional: 2º turno, top-2 com barras, diferença,
- * collapse dos demais candidatos e totais (tudo do agregado TSE ao vivo).
- */
+/** Card da disputa nacional: resumo (top-2 lado a lado) ou lista completa. */
 export function RaceCard({
   results,
+  turno = 1,
   className
 }: {
   results: TseSnapshot | null
+  turno?: Turno
   className?: string
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -84,49 +111,128 @@ export function RaceCard({
     vv ? Math.round((vap / vv) * 10000) / 100 : 0
   const p1 = pctOf(first.vap)
   const p2 = pctOf(second.vap)
+  // 1T: decide acima de 50% (vai ao 2º turno caso contrário).
+  // 2T: só a maioria absoluta elege; abaixo disso, duelo em aberto.
+  const decided = turno === 2 ? p1 > 50 : p1 >= 50
 
   const infoOf = (sq: string) => results.candidatos?.[sq]
   const i1 = infoOf(first.sq)
   const i2 = infoOf(second.sq)
+  const photoOf = (sq: string) => results.meta.fotos.replace('{sqcand}', sq)
+  const definedAt = fmtHourMin(
+    (results.meta as Record<string, unknown>)?.atualizadoEm
+  )
 
   const diffPts = Math.round(Math.abs(p1 - p2) * 100) / 100
   const diffVotes = Math.abs(first.vap - second.vap)
 
-  const rest = (results.nacional.full ?? [])
-    .filter((c) => c.sq !== first.sq && c.sq !== second.sq)
-    .map((c) => ({ ...c, info: infoOf(c.sq), pct: pctOf(c.vap) }))
-  const visibleRest = expanded ? rest : rest.slice(0, 3)
-  const hiddenRest = expanded ? [] : rest.slice(3)
+  const full = (results.nacional.full ?? []).map((c) => ({
+    ...c,
+    info: infoOf(c.sq),
+    pct: pctOf(c.vap)
+  }))
+  const all = [...full].sort((a, b) => b.vap - a.vap)
+  const rest = all.filter((c) => c.sq !== first.sq && c.sq !== second.sq)
+  const visibleRest = rest.slice(0, 3)
+  const hiddenRest = rest.slice(3)
   const hiddenPct = hiddenRest.reduce((s, c) => s + c.pct, 0)
-  const totalCount =
-    (results.nacional.full ?? results.nacional.top.map((c) => ({ sq: c.sq, vap: 0 }))).length
+  const totalCount = all.length
+
+  if (expanded) {
+    return (
+      <section
+        aria-label="Todos os candidatos a presidente"
+        className={cn(
+          'border-woodsmoke-800 bg-woodsmoke-900/80 rounded-xl border p-3',
+          className
+        )}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-woodsmoke-400 text-xs">
+            Presidente · Brasil · {totalCount} candidatos
+          </p>
+          <button
+            type="button"
+            onClick={() => setExpanded(false)}
+            className="text-woodsmoke-200 text-xs font-semibold underline decoration-woodsmoke-600 underline-offset-2 hover:text-woodsmoke-100"
+          >
+            Voltar
+          </button>
+        </div>
+        <Scrollable aria-label="Candidatos" className="mt-1 max-h-80">
+          <ul className="divide-y divide-woodsmoke-800">
+            {all.map((c) => (
+              <li key={c.sq} className="flex items-center gap-2.5 py-1.5">
+                <CandidateAvatar
+                  name={toTitle(c.info?.nmu ?? '')}
+                  src={photoOf(c.sq)}
+                />
+                <div className="min-w-0 flex-1 leading-tight">
+                  <p className="text-woodsmoke-50 truncate text-sm font-bold">
+                    {toTitle(c.info?.nmu ?? c.sq)}
+                  </p>
+                  <p
+                    className="text-[11px] font-semibold"
+                    style={{ color: accentOfSg(c.info?.sg ?? '') }}
+                  >
+                    {c.info?.sg} {c.info?.n}
+                  </p>
+                </div>
+                <p className="text-right leading-tight tabular-nums">
+                  <span className="text-woodsmoke-50 text-sm font-bold">
+                    {fmtPct1(c.pct)}
+                  </span>
+                  <br />
+                  <span className="text-woodsmoke-400 text-[11px]">
+                    {fmtInt(c.vap)}
+                  </span>
+                </p>
+              </li>
+            ))}
+          </ul>
+        </Scrollable>
+      </section>
+    )
+  }
+
+  const duo = [
+    { c: first, info: i1, pct: p1 },
+    { c: second, info: i2, pct: p2 }
+  ]
+  const duoSum = p1 + p2
+  const redShare = duoSum > 0 ? (p1 / duoSum) * 100 : 50
 
   return (
     <section
       aria-label="Disputa nacional para presidente"
       className={cn(
-        'border-woodsmoke-800 bg-woodsmoke-900/80 rounded-2xl border p-4',
+        'border-woodsmoke-800 bg-woodsmoke-900/80 rounded-xl border p-3',
         className
       )}
     >
-      <p className="text-woodsmoke-300 inline-flex items-center gap-2 rounded-full border border-woodsmoke-700 bg-woodsmoke-800 px-2.5 py-1 text-[11px] font-semibold">
-        Presidente · Brasil
-        <span aria-hidden="true" className="inline-block h-1.5 w-1.5 rounded-full bg-woodsmoke-100" />
-        {p1 < 50 ? '2º turno' : 'Decidido no 1º turno'}
+      <p className="flex items-center gap-2 text-[10px] font-semibold whitespace-nowrap">
+        <span className="text-woodsmoke-500">Presidente · Brasil</span>
+        <span className="text-woodsmoke-300 inline-flex items-center gap-2 rounded-full border border-woodsmoke-700 bg-woodsmoke-800 px-2.5 py-1">
+          <span aria-hidden="true" className="inline-block h-1.5 w-1.5 rounded-full bg-woodsmoke-100" />
+          {decided ? `Decidido no ${turnoLabel(turno)}` : '2º turno'}
+          {definedAt ? ` · definido às ${definedAt}` : null}
+        </span>
       </p>
 
-      <h2 className="mt-2 text-xl leading-snug font-bold">
-        {p1 < 50 ? (
+      <h2 className="mt-2 font-literata text-xl leading-tight font-normal">
+        {!decided ? (
           <>
             <span style={{ color: accentOfSg(i1?.sg ?? '') }}>
               {toTitle(i1?.nmu ?? first.sq)}
             </span>{' '}
-            <span className="text-woodsmoke-100 font-semibold">e</span>{' '}
+            <span className="text-woodsmoke-100 font-semibold">e</span>
             <br />
             <span style={{ color: accentOfSg(i2?.sg ?? '') }}>
               {toTitle(i2?.nmu ?? second.sq)}
             </span>{' '}
-            <span className="text-woodsmoke-100 font-semibold">vão ao 2º turno</span>
+            <span className="text-woodsmoke-100 font-semibold">
+              {turno === 2 ? 'disputam o 2º turno' : 'vão ao 2º turno'}
+            </span>
           </>
         ) : (
           <>
@@ -140,143 +246,128 @@ export function RaceCard({
         )}
       </h2>
 
-      <ul className="mt-3 space-y-3">
-        {[
-          { c: first, info: i1, pct: p1 },
-          { c: second, info: i2, pct: p2 }
-        ].map(({ c, info, pct }) => (
-          <li key={c.sq}>
-            <div className="flex items-center gap-2.5">
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        {duo.map(({ c, info, pct }) => (
+          <div key={c.sq}>
+            <div className="flex items-center gap-2">
               <CandidateAvatar
+                size="lg"
                 name={toTitle(info?.nmu ?? '')}
-                src={results.meta.fotos.replace('{sqcand}', c.sq)}
+                src={photoOf(c.sq)}
               />
-              <div className="min-w-0 flex-1 leading-tight">
+              <div className="min-w-0 leading-tight">
                 <p className="text-woodsmoke-50 truncate text-sm font-bold">
                   {toTitle(info?.nmu ?? c.sq)}
                 </p>
                 <p
-                  className="text-xs font-semibold"
+                  className="text-[11px] font-semibold"
                   style={{ color: accentOfSg(info?.sg ?? '') }}
                 >
                   {info?.sg} {info?.n}
                 </p>
               </div>
-              <p className="text-right leading-none tabular-nums">
-                <span className="text-woodsmoke-50 text-2xl font-bold">
-                  {fmtPct(pct).replace('%', '')}
-                </span>
-                <span className="text-woodsmoke-400 text-sm font-bold">%</span>
-              </p>
             </div>
-            <p className="text-woodsmoke-400 mt-0.5 text-right text-[11px] tabular-nums">
+            <p className="mt-1.5 font-literata leading-none font-normal tabular-nums">
+              <span
+                className="text-3xl font-bold"
+                style={{ color: accentOfSg(info?.sg ?? '') }}
+              >
+                {fmtPct(pct).replace('%', '')}
+              </span>
+              <span
+                className="text-lg font-bold"
+                style={{ color: accentOfSg(info?.sg ?? '') }}
+              >
+                %
+              </span>
+            </p>
+            <p className="text-woodsmoke-400 mt-1 text-[11px] tabular-nums">
               {fmtInt(c.vap)} votos
             </p>
-            <div
-              className="bg-woodsmoke-800 mt-1 h-1.5 overflow-hidden rounded-full"
-              role="img"
-              aria-label={`${info?.sg} ${fmtPct(pct)} dos votos válidos`}
-            >
-              <div
-                className="h-full rounded-full"
-                style={{
-                  width: `${Math.min(100, Math.max(0, pct))}%`,
-                  backgroundColor: accentOfSg(info?.sg ?? '')
-                }}
-              />
-            </div>
-          </li>
+          </div>
         ))}
-      </ul>
+      </div>
 
-      <p className="text-woodsmoke-400 mt-3 text-[11px] tabular-nums">
-        Diferença{' '}
-        <strong className="text-woodsmoke-200">
-          {diffPts.toFixed(2).replace('.', ',')} pontos · {fmtMilhoes(diffVotes)}
-        </strong>
-      </p>
-      {p1 < 50 && (
-        <p className="text-woodsmoke-400 mt-1 text-[11px]">
-          2º turno <strong className="text-woodsmoke-200">Em 25 de outubro</strong>
-        </p>
-      )}
-      <div className="border-woodsmoke-800 mt-3 space-y-1 border-t pt-2">
+      <div
+        className="bg-woodsmoke-800 relative mt-2 flex h-1.5 overflow-visible rounded-full"
+        role="img"
+        aria-label={`Vantagem: ${i1?.sg} ${fmtPct(p1)} contra ${i2?.sg} ${fmtPct(p2)}`}
+      >
+        <div
+          className="h-full rounded-l-full"
+          style={{
+            width: `${redShare}%`,
+            backgroundColor: accentOfSg(i1?.sg ?? '')
+          }}
+        />
+        <div
+          className="h-full flex-1 rounded-r-full"
+          style={{ backgroundColor: accentOfSg(i2?.sg ?? '') }}
+        />
+        <span
+          aria-hidden="true"
+          className="absolute top-1/2 h-3.5 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white"
+          style={{ left: '50%' }}
+        />
+      </div>
+
+      <dl className="mt-3 space-y-2 text-[11px]">
+        <div className="flex items-center justify-between gap-2">
+          <dt className="text-woodsmoke-500">Diferença</dt>
+          <dd className="text-woodsmoke-400 tabular-nums">
+            {diffPts.toFixed(2).replace('.', ',')} pontos ·{' '}
+            {fmtMilhoes(diffVotes)}
+          </dd>
+        </div>
+        {turno === 1 && !decided && (
+          <div className="flex items-center justify-between gap-2">
+            <dt className="text-woodsmoke-500">2º turno</dt>
+            <dd className="text-woodsmoke-400">
+              Em 25 de outubro
+            </dd>
+          </div>
+        )}
+      </dl>
+
+      <div className="border-woodsmoke-800 mt-2 border-t pt-1">
         {visibleRest.map((c) => (
-          <div key={c.sq} className="flex items-center gap-2.5 py-1">
+          <div key={c.sq} className="flex items-center gap-2 py-1">
             <CandidateAvatar
               name={toTitle(c.info?.nmu ?? '')}
-              src={results.meta.fotos.replace('{sqcand}', c.sq)}
+              src={photoOf(c.sq)}
             />
             <div className="min-w-0 flex-1 leading-tight">
-              <p className="text-woodsmoke-50 truncate text-sm font-semibold">
+              <p className="text-woodsmoke-50 truncate text-xs font-semibold">
                 {toTitle(c.info?.nmu ?? c.sq)}
               </p>
-              <p className="text-woodsmoke-400 text-[11px]">
+              <p
+                className="text-[11px] font-semibold"
+                style={{ color: accentOfSg(c.info?.sg ?? '') }}
+              >
                 {c.info?.sg} {c.info?.n}
               </p>
             </div>
             <span className="text-woodsmoke-200 text-xs font-bold tabular-nums">
-              {c.pct.toFixed(1).replace('.', ',')}%
+              {fmtPct1(c.pct)}
             </span>
           </div>
         ))}
-        {!expanded && hiddenRest.length > 0 && (
-          <p className="text-woodsmoke-400 py-1 text-[11px]">
-            Mais {hiddenRest.length} candidatos somam{' '}
-            {hiddenPct.toFixed(1).replace('.', ',')}%
+        {hiddenRest.length > 0 && (
+          <p className="text-woodsmoke-400 py-0.5 text-[11px]">
+            Mais {hiddenRest.length}{' '}
+            {hiddenRest.length === 1 ? 'candidatura soma' : 'candidaturas somam'}{' '}
+            {fmtPct1(hiddenPct)}
           </p>
         )}
         <button
           type="button"
-          onClick={() => setExpanded((v) => !v)}
+          onClick={() => setExpanded(true)}
           aria-expanded={expanded}
-          className="text-woodsmoke-300 text-xs font-semibold underline decoration-woodsmoke-600 underline-offset-2 hover:text-woodsmoke-100"
+          className="text-woodsmoke-300 mt-0.5 text-[11px] font-semibold underline decoration-woodsmoke-600 underline-offset-2 hover:text-woodsmoke-100"
         >
-          {expanded
-            ? 'Mostrar menos'
-            : `Todos os ${totalCount} candidatos`}
+          Todos os {totalCount} candidatos
         </button>
       </div>
-
-      <RaceTotals results={results} />
     </section>
-  )
-}
-
-function RaceTotals({ results }: { results: TseSnapshot }) {
-  const n = results.nacional
-  const tv = n.tv ?? (n.vv ?? 0) + (n.vb ?? 0) + (n.vn ?? 0)
-  const comparecimento =
-    n.te != null && n.te > 0 ? (tv / n.te) * 100 : null
-  const brancosNulos =
-    tv > 0 ? (((n.vb ?? 0) + (n.vn ?? 0)) / tv) * 100 : null
-  const cells: { label: string; text: string }[] = [
-    { label: 'Votos válidos', text: fmtInt(n.vv) },
-    {
-      label: 'Comparecimento',
-      text:
-        comparecimento != null
-          ? `${comparecimento.toFixed(1).replace('.', ',')}%`
-          : '–'
-    },
-    {
-      label: 'Brancos e nulos',
-      text:
-        brancosNulos != null
-          ? `${brancosNulos.toFixed(1).replace('.', ',')}%`
-          : '–'
-    }
-  ]
-  return (
-    <dl className="border-woodsmoke-800 mt-3 grid grid-cols-3 gap-2 border-t pt-2.5">
-      {cells.map((c) => (
-        <div key={c.label}>
-          <dt className="text-woodsmoke-400 text-[11px]">{c.label}</dt>
-          <dd className="text-woodsmoke-50 text-sm font-bold tabular-nums">
-            {c.text}
-          </dd>
-        </div>
-      ))}
-    </dl>
   )
 }

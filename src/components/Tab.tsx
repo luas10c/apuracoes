@@ -16,10 +16,6 @@ import {
 
 import { cn } from 'tailwind-variants'
 
-/* -------------------------------------------------------------------------- */
-/*                                    Types                                   */
-/* -------------------------------------------------------------------------- */
-
 export type TabsOrientation = 'horizontal' | 'vertical'
 export type TabsActivationMode = 'automatic' | 'manual'
 export type TabsSize = 'sm' | 'md' | 'lg'
@@ -63,10 +59,6 @@ type TabItemContextValue = {
   disabled: boolean
 }
 
-/* -------------------------------------------------------------------------- */
-/*                                   Context                                  */
-/* -------------------------------------------------------------------------- */
-
 const TabsContext = createContext<TabsContextValue | null>(null)
 const TabItemContext = createContext<TabItemContextValue | null>(null)
 
@@ -82,19 +74,11 @@ export function useOptionalTabItemContext() {
   return use(TabItemContext)
 }
 
-/* -------------------------------------------------------------------------- */
-/*                                    Sizes                                   */
-/* -------------------------------------------------------------------------- */
-
 const itemSizes: Record<TabsSize, string> = {
   sm: 'h-8 px-3 text-xs',
   md: 'h-9 px-4 text-sm',
   lg: 'h-10 px-5 text-base'
 }
-
-/* -------------------------------------------------------------------------- */
-/*                                  Tabs.Root                                 */
-/* -------------------------------------------------------------------------- */
 
 export type TabsRootProps = {
   value?: string
@@ -148,7 +132,6 @@ export function TabsRoot({
     tabElementsRef.current.delete(tabValue)
   }, [])
 
-  // Update active tab indicator position
   useEffect(() => {
     const listEl = listRef.current
     if (!listEl) return
@@ -248,10 +231,6 @@ export function TabsRoot({
   )
 }
 
-/* -------------------------------------------------------------------------- */
-/*                                  Tabs.List                                 */
-/* -------------------------------------------------------------------------- */
-
 export type TabsListProps = ComponentProps<'div'> & {
   variant?: 'line' | 'pills' | 'bordered'
   wrap?: boolean
@@ -349,10 +328,6 @@ export function TabsList({
     </div>
   )
 }
-
-/* -------------------------------------------------------------------------- */
-/*                                  Tabs.Item                                 */
-/* -------------------------------------------------------------------------- */
 
 export type TabsItemProps = Omit<ComponentProps<'button'>, 'value'> & {
   value: string
@@ -462,10 +437,6 @@ export function TabsItem({
   )
 }
 
-/* -------------------------------------------------------------------------- */
-/*                               Tabs.Indicator                               */
-/* -------------------------------------------------------------------------- */
-
 export type TabsIndicatorProps = ComponentProps<'div'> & {
   'variant'?: TabIndicatorVariant
   'color'?: string
@@ -487,11 +458,9 @@ export function TabsIndicator({
   const itemContext = useOptionalTabItemContext()
   const { indicatorRect } = useTabsContext()
 
-  // Format thickness string
   const thicknessVal
     = typeof thickness === 'number' ? `${thickness}px` : thickness
 
-  // Normalize variant aliases
   const isBottom = variant === 'bottom' || variant === 'underline'
   const isTop = variant === 'top'
   const isBorder = variant === 'border' || variant === 'outline'
@@ -499,7 +468,6 @@ export function TabsIndicator({
   const isLeft = variant === 'left'
   const isRight = variant === 'right'
 
-  // Resolve custom color styles
   const customColorStyle: CSSProperties = {}
   if (color) {
     if (isBorder) {
@@ -507,13 +475,11 @@ export function TabsIndicator({
     } else if (isPill) {
       customColorStyle.backgroundColor = color
     } else {
-      // line / border variants
       customColorStyle.backgroundColor = color
       customColorStyle.borderColor = color
     }
   }
 
-  // If rendered inside a Tabs.Item
   if (itemContext) {
     if (!itemContext.isActive) return null
 
@@ -551,7 +517,6 @@ export function TabsIndicator({
     )
   }
 
-  // If rendered inside Tabs.List (floating/sliding indicator)
   const isReady = indicatorRect?.ready ?? false
 
   return (
@@ -626,10 +591,6 @@ export function TabsIndicator({
   )
 }
 
-/* -------------------------------------------------------------------------- */
-/*                                 Tabs.Panel                                 */
-/* -------------------------------------------------------------------------- */
-
 export type TabsPanelProps = ComponentProps<'div'> & {
   value: string
   keepMounted?: boolean
@@ -674,10 +635,6 @@ export function TabsPanel({
     </div>
   )
 }
-
-/* -------------------------------------------------------------------------- */
-/*                                   Exports                                  */
-/* -------------------------------------------------------------------------- */
 
 export const Tabs = {
   Root: TabsRoot,

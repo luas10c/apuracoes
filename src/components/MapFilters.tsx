@@ -79,7 +79,12 @@ export function MapFilters({
   const selected = candidates.find((c) => c.sq === candidateSq) ?? null
 
   return (
-    <div className={cn('relative z-30 flex items-center gap-1', className)}>
+    <div
+      className={cn(
+        'border-woodsmoke-800 bg-woodsmoke-900/90 relative z-30 flex items-center gap-1 rounded-full border px-1 py-1 shadow-xl backdrop-blur',
+        className
+      )}
+    >
       {TABS.map((t) => (
         <button
           key={t.value}
@@ -87,7 +92,7 @@ export function MapFilters({
           onClick={() => onViewChange(t.value)}
           aria-pressed={view === t.value}
           className={cn(
-            'rounded-full px-3 py-1 text-xs font-semibold whitespace-nowrap transition-colors',
+            'rounded-full px-3 py-1 text-[11px] font-semibold whitespace-nowrap transition-colors',
             view === t.value
               ? 'border-woodsmoke-600 bg-woodsmoke-800 text-woodsmoke-50 border'
               : 'text-woodsmoke-400 hover:text-woodsmoke-200'
@@ -105,7 +110,7 @@ export function MapFilters({
               if (view !== 'candidato') onViewChange('candidato')
             }}
             className={cn(
-              'flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold whitespace-nowrap transition-colors',
+              'flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold whitespace-nowrap transition-colors',
               view === 'candidato'
                 ? 'border-woodsmoke-600 bg-woodsmoke-800 text-woodsmoke-50 border'
                 : 'text-woodsmoke-400 hover:text-woodsmoke-200'

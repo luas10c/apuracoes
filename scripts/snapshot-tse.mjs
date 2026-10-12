@@ -20,12 +20,19 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT_BR = join(ROOT, 'public', 'maps', 'tse-2026-1t-presidente.json')
+const OUT_BR_2T = join(ROOT, 'public', 'maps', 'tse-2026-2t-presidente.json')
 const OUT_ZZ = join(ROOT, 'public', 'maps', 'tse-exterior-2026-1t.json')
+const OUT_ZZ_2T = join(ROOT, 'public', 'maps', 'tse-exterior-2026-2t.json')
 const OUT_SEN = join(ROOT, 'public', 'maps', 'tse-senadores-2026-1t.json')
+const OUT_GOV = join(ROOT, 'public', 'maps', 'tse-governadores-2026-1t.json')
+const OUT_GOV_2T = join(ROOT, 'public', 'maps', 'tse-governadores-2026-2t.json')
+const OUT_DEP = join(ROOT, 'public', 'maps', 'tse-deputados-2026-1t.json')
 
 const ELEICAO = '6257'
 const CARGO = '0001'
 const BASE = `https://resultados.tse.jus.br/oficial/ele2026/${ELEICAO}`
+// TODO(2T): trocar pelo pleito do 2º turno quando o TSE publicar.
+const ELEICAO_2T = '6257'
 
 const UFS = [
   'ac', 'al', 'ap', 'am', 'ba', 'ce', 'df', 'es', 'go', 'ma', 'mt', 'ms',
@@ -131,8 +138,9 @@ function contentHash(cidades) {
   return (h >>> 0).toString(16)
 }
 
-async function aggregateBrasil() {
-  const cm = await getJSONRetry(`${BASE}/config/mun-e00${ELEICAO}-cm.json`)
+async function aggregateBrasil(eleicao = ELEICAO, turno = 1) {
+  const base = `https://resultados.tse.jus.br/oficial/ele2026/${eleicao}`
+  const cm = await getJSONRetry(`${base}/config/mun-e00${eleicao}-cm.json`)
   const jobs = []
   for (const abr of cm?.abr ?? []) {
     const uf = String(abr.cd ?? '').toLowerCase()
@@ -147,7 +155,7 @@ async function aggregateBrasil() {
     }
   }
   const brData = await getJSONRetry(
-    `${BASE}/dados/br/br-c${CARGO}-e00${ELEICAO}-u.json`
+    `${base}/dados/br/br-c${CARGO}-e00${eleicao}-u.json`
   )
   const brFull = extractTop(brData, Number.MAX_SAFE_INTEGER)
   const candidatos = {}
@@ -155,7 +163,7 @@ async function aggregateBrasil() {
     candidatos[c.sq] = { nmu: c.nmu, sg: c.sg, n: c.n }
   }
   const ufFiles = await mapPool(UFS, CONCURRENCY, (uf) =>
-    getJSONRetry(`${BASE}/dados/${uf}/${uf}-c${CARGO}-e00${ELEICAO}-u.json`)
+    getJSONRetry(`${base}/dados/${uf}/${uf}-c${CARGO}-e00${eleicao}-u.json`)
   )
   const ufs = {}
   UFS.forEach((uf, i) => {
@@ -165,7 +173,7 @@ async function aggregateBrasil() {
   })
   const munFiles = await mapPool(jobs, CONCURRENCY, (j) =>
     getJSONRetry(
-      `${BASE}/dados/${j.uf}/${j.uf}${j.tse}-c${CARGO}-e00${ELEICAO}-u.json`
+      `${base}/dados/${j.uf}/${j.uf}${j.tse}-c${CARGO}-e00${eleicao}-u.json`
     )
   )
   const cidades = {}
@@ -188,11 +196,11 @@ async function aggregateBrasil() {
   return {
     meta: {
       fonte: 'Tribunal Superior Eleitoral — resultados.tse.jus.br',
-      eleicao: ELEICAO,
-      turno: 1,
+      eleicao,
+      turno,
       cargo: 'Presidente',
       atualizadoEm: new Date().toISOString(),
-      fotos: `${BASE}/fotos/br/{sqcand}.jpeg`,
+      fotos: `${base}/fotos/br/{sqcand}.jpeg`,
       totalMunicipios: jobs.length,
       falhas,
       hash: contentHash(cidades)
@@ -208,8 +216,9 @@ async function aggregateBrasil() {
   }
 }
 
-async function aggregateExterior() {
-  const cm = await getJSONRetry(`${BASE}/config/mun-e00${ELEICAO}-cm.json`)
+async function aggregateExterior(eleicao = ELEICAO, turno = 1) {
+  const base = `https://resultados.tse.jus.br/oficial/ele2026/${eleicao}`
+  const cm = await getJSONRetry(`${base}/config/mun-e00${eleicao}-cm.json`)
   const zz = (cm?.abr ?? []).find(
     (a) => String(a.cd ?? '').toLowerCase() === 'zz'
   )
@@ -218,11 +227,11 @@ async function aggregateExterior() {
     nome: mu.nm ?? ''
   }))
   const zzData = await getJSONRetry(
-    `${BASE}/dados/zz/zz-c${CARGO}-e00${ELEICAO}-u.json`
+    `${base}/dados/zz/zz-c${CARGO}-e00${eleicao}-u.json`
   )
   const cityFiles = await mapPool(jobs, 16, (j) =>
     getJSONRetry(
-      `${BASE}/dados/zz/zz${j.tse}-c${CARGO}-e00${ELEICAO}-u.json`
+      `${base}/dados/zz/zz${j.tse}-c${CARGO}-e00${eleicao}-u.json`
     )
   )
   const cidades = {}
@@ -242,11 +251,11 @@ async function aggregateExterior() {
   return {
     meta: {
       fonte: 'Tribunal Superior Eleitoral — resultados.tse.jus.br',
-      eleicao: ELEICAO,
-      turno: 1,
+      eleicao,
+      turno,
       cargo: 'Presidente',
       atualizadoEm: new Date().toISOString(),
-      fotos: `${BASE}/fotos/br/{sqcand}.jpeg`,
+      fotos: `${base}/fotos/br/{sqcand}.jpeg`,
       totalCidades: jobs.length,
       falhas,
       hash: contentHash(cidades)
@@ -267,7 +276,7 @@ function extractElected(data) {
     for (const par of agr?.par ?? []) {
       for (const c of par?.cand ?? []) {
         const elected =
-          c.e === 's' || /^\s*eleito\b/i.test(String(c.st ?? ''))
+          /^\s*eleit/i.test(String(c.st ?? ''))
         if (!elected) continue
         list.push({
           nmu: String(c.nmu ?? c.nm ?? ''),
@@ -295,6 +304,8 @@ async function aggregateSenators() {
     const uf = UFS[i].toUpperCase()
     ufs[uf] = {
       elected: extractElected(r.value),
+      top: extractGovCandidates(r.value).slice(0, 2).map(({ elected: _e, ...rest }) => rest),
+      vv: num(r.value?.v?.vv),
       hg: typeof r.value?.hg === 'string' ? r.value.hg : null,
       sectionsPct: num(r.value?.s?.pst)
     }
@@ -312,32 +323,203 @@ async function aggregateSenators() {
   }
 }
 
+function extractGovCandidates(data) {
+  const list = []
+  for (const agr of data?.carg?.[0]?.agr ?? []) {
+    for (const par of agr?.par ?? []) {
+      for (const c of par?.cand ?? []) {
+        list.push({
+          nmu: String(c.nmu ?? c.nm ?? ''),
+          sg: String(par?.sg ?? ''),
+          n: String(par?.n ?? ''),
+          sq: String(c.sqcand),
+          vap: num(c.vap) ?? 0,
+          elected: /^\s*eleit/i.test(String(c.st ?? ''))
+        })
+      }
+    }
+  }
+  list.sort((a, b) => b.vap - a.vap)
+  return list
+}
+
+async function aggregateGovernors(eleicao = '6259', turno = 1) {
+  const base = `https://resultados.tse.jus.br/oficial/ele2026/${eleicao}`
+  const files = await mapPool(UFS, 12, (uf) =>
+    getJSONRetry(`${base}/dados/${uf}/${uf}-c0003-e00${eleicao}-u.json`)
+  )
+  const ufs = {}
+  files.forEach((r, i) => {
+    if (!r.ok) return
+    const uf = UFS[i].toUpperCase()
+    const all = extractGovCandidates(r.value)
+    ufs[uf] = {
+      elected: all.filter((c) => c.elected),
+      top: all.slice(0, 2),
+      vv: num(r.value?.v?.vv),
+      vb: num(r.value?.v?.vb),
+      vn: num(r.value?.v?.vn),
+      te: num(r.value?.e?.te),
+      abst: num(r.value?.e?.a),
+      hg: typeof r.value?.hg === 'string' ? r.value.hg : null,
+      sectionsPct: num(r.value?.s?.pst)
+    }
+  })
+  return {
+    meta: {
+      fonte: 'Tribunal Superior Eleitoral — resultados.tse.jus.br',
+      eleicao,
+      turno,
+      cargo: 'Governador',
+      atualizadoEm: new Date().toISOString(),
+      fotos: `${base}/fotos/{uf}/{sqcand}.jpeg`
+    },
+    ufs
+  }
+}
+
+const VAGAS_FEDERAL = {
+  AC: 8, AL: 9, AP: 8, AM: 8, BA: 39, CE: 22, DF: 8, ES: 10, GO: 17,
+  MA: 18, MT: 8, MS: 8, MG: 53, PA: 17, PB: 12, PR: 30, PE: 25, PI: 10,
+  RJ: 46, RN: 8, RS: 31, RO: 8, RR: 8, SC: 16, SP: 70, SE: 8, TO: 8
+}
+
+async function aggregateDeputiesCargo(cargo, withVagas) {
+  const base = `https://resultados.tse.jus.br/oficial/ele2026/6259`
+  const files = await mapPool(UFS, 12, (uf) =>
+    getJSONRetry(`${base}/dados/${uf}/${uf}-c${cargo}-e006259-u.json`)
+  )
+  const ufs = {}
+  const partySeats = new Map()
+  const all = []
+  let totalCandidatos = 0
+  files.forEach((r, i) => {
+    if (!r.ok) return
+    const UF = UFS[i].toUpperCase()
+    const cands = extractGovCandidates(r.value).map((c) => ({ ...c, uf: UF }))
+    totalCandidatos += cands.length
+    const elected = cands.filter((c) => c.elected)
+    const seats = new Map()
+    for (const c of elected) {
+      seats.set(c.sg, (seats.get(c.sg) ?? 0) + 1)
+      partySeats.set(c.sg, (partySeats.get(c.sg) ?? 0) + 1)
+    }
+    ufs[UF] = {
+      seats: [...seats.entries()]
+        .map(([sg, eleitos]) => ({ sg, eleitos }))
+        .sort((a, b) => b.eleitos - a.eleitos),
+      top: cands.slice(0, 10),
+      totalEleitos: elected.length,
+      totalCandidatos: cands.length,
+      vv: num(r.value?.v?.vv),
+      sectionsPct: num(r.value?.s?.pst)
+    }
+    all.push(...cands)
+  })
+  all.sort((a, b) => b.vap - a.vap)
+  return {
+    vagas: withVagas
+      ? Object.values(VAGAS_FEDERAL).reduce((s, v) => s + v, 0)
+      : null,
+    totalEleitos: [...partySeats.values()].reduce((s, v) => s + v, 0),
+    totalCandidatos,
+    partidos: [...partySeats.entries()]
+      .map(([sg, eleitos]) => ({ sg, eleitos }))
+      .sort((a, b) => b.eleitos - a.eleitos),
+    ufs,
+    ranking: all.slice(0, 50)
+  }
+}
+
+async function aggregateDeputies() {
+  const base = `https://resultados.tse.jus.br/oficial/ele2026/6259`
+  const [federal, estadual] = await Promise.all([
+    aggregateDeputiesCargo('0006', true),
+    aggregateDeputiesCargo('0007', false)
+  ])
+  return {
+    meta: {
+      fonte: 'Tribunal Superior Eleitoral — resultados.tse.jus.br',
+      eleicao: '6259',
+      turno: 1,
+      cargo: 'Deputados',
+      atualizadoEm: new Date().toISOString(),
+      fotos: `${base}/fotos/{uf}/{sqcand}.jpeg`
+    },
+    federal,
+    estadual
+  }
+}
+
 async function main() {
   const started = Date.now()
-  try {
-    console.log('[snapshot] agregando Brasil…')
+  const step = async (label, fn) => {
+    try {
+      console.log(`[snapshot] ${label}…`)
+      await fn()
+    } catch (err) {
+      // Best-effort por etapa: uma falha (ex.: 2T ainda não publicado)
+      // nunca quebra o deploy nem os demais snapshots.
+      console.error(`[snapshot] ${label} falhou (segue):`, err?.message ?? err)
+    }
+  }
+  await step('agregando Brasil 1T', async () => {
     const br = await aggregateBrasil()
     await writeEnvelope(OUT_BR, br)
     console.log(
       `[snapshot] Brasil: ${Object.keys(br.cidades).length} cidades, ${br.meta.falhas} falhas`
     )
-    console.log('[snapshot] agregando exterior…')
+  })
+  await step('agregando Brasil 2T', async () => {
+    const br = await aggregateBrasil(ELEICAO_2T, 2)
+    await writeEnvelope(OUT_BR_2T, br)
+    console.log(
+      `[snapshot] Brasil 2T: ${Object.keys(br.cidades).length} cidades, ${br.meta.falhas} falhas`
+    )
+  })
+  await step('agregando exterior 1T', async () => {
     const zz = await aggregateExterior()
     await writeEnvelope(OUT_ZZ, zz)
     console.log(
       `[snapshot] exterior: ${Object.keys(zz.cidades).length} cidades, ${zz.meta.falhas} falhas`
     )
-    console.log('[snapshot] agregando senadores…')
+  })
+  await step('agregando exterior 2T', async () => {
+    const zz = await aggregateExterior(ELEICAO_2T, 2)
+    await writeEnvelope(OUT_ZZ_2T, zz)
+    console.log(
+      `[snapshot] exterior 2T: ${Object.keys(zz.cidades).length} cidades, ${zz.meta.falhas} falhas`
+    )
+  })
+  await step('agregando senadores', async () => {
     const sen = await aggregateSenators()
     await writeEnvelope(OUT_SEN, sen)
     console.log(
       `[snapshot] senadores: ${Object.keys(sen.ufs).length} UFs`
     )
-    console.log(`[snapshot] OK em ${Math.round((Date.now() - started) / 1000)}s`)
-  } catch (err) {
-    // Best-effort: nunca quebra o deploy; rotas usam o snapshot anterior.
-    console.error('[snapshot] falhou (deploy segue):', err?.message ?? err)
-  }
+  })
+  await step('agregando governadores 1T', async () => {
+    const gov = await aggregateGovernors()
+    await writeEnvelope(OUT_GOV, gov)
+    console.log(
+      `[snapshot] governadores: ${Object.keys(gov.ufs).length} UFs`
+    )
+  })
+  await step('agregando governadores 2T', async () => {
+    const gov = await aggregateGovernors('6259', 2)
+    await writeEnvelope(OUT_GOV_2T, gov)
+    console.log(
+      `[snapshot] governadores 2T: ${Object.keys(gov.ufs).length} UFs`
+    )
+  })
+  await step('agregando deputados', async () => {
+    const dep = await aggregateDeputies()
+    await writeEnvelope(OUT_DEP, dep)
+    console.log(
+      `[snapshot] deputados: ${dep.federal.totalEleitos} federais, ${dep.estadual.totalEleitos} estaduais`
+    )
+  })
+  console.log(`[snapshot] OK em ${Math.round((Date.now() - started) / 1000)}s`)
 }
 
 main()

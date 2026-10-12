@@ -14,10 +14,7 @@ export function isSlottable(
 
 type AnyProps = Record<string, unknown>
 
-/**
- * Reads the ref from an element in a way compatible with React 18 and 19.
- * React 19 warns when accessing `element.ref` directly.
- */
+/** Compatible with React 18 and 19 (19 warns on direct `element.ref` access). */
 export function getElementRef<T = unknown>(
   element: React.ReactElement
 ): React.Ref<T> | undefined {
@@ -41,13 +38,7 @@ export function composeRefs<T>(
   }
 }
 
-/**
- * Merges Slot props with child props:
- * - Event handlers are composed (child runs first)
- * - `style` is shallowly merged (child overrides)
- * - `className` is concatenated
- * - All other props: child takes precedence
- */
+/** Merges Slot props into child props (handlers composed, child wins). */
 export function mergeProps(
   slotProps: AnyProps,
   childProps: AnyProps
@@ -127,27 +118,7 @@ export type SlotProps<T extends React.ElementType = 'span'> =
     asChild?: boolean
   }
 
-/**
- * A `Slot` component compatible with @radix-ui/react-slot.
- *
- * Delegates rendering to its immediate child, merging props
- * (including event handlers and className) and composing refs.
- *
- * Supports the advanced `<Slottable>` API for composite layouts.
- *
- * @example Basic usage
- * <Slot onClick={handleClick} className="btn">
- *   <button>Click me</button>
- * </Slot>
- *
- * @example With Slottable (composite layout)
- * <Slot>
- *   <span className="icon">🔒</span>
- *   <Slottable>
- *     <button>Sign in</button>
- *   </Slottable>
- * </Slot>
- */
+/** Compatible with @radix-ui/react-slot, with `<Slottable>` support. */
 export const Slot = forwardRef<HTMLElement, SlotProps>(
   ({ children, ...slotProps }, forwardedRef) => {
     const childrenArray = Children.toArray(children)

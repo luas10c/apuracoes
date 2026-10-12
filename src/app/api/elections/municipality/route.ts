@@ -1,15 +1,26 @@
 /**
- * Proxy ao vivo do TSE — Eleições 2026, 1º turno, Presidente (pleito 6257).
+ * Proxy ao vivo do TSE — Eleições 2026, Presidente.
  *
- * GET /api/elections/municipality?ibge=1500602
+ * GET /api/elections/municipality?ibge=1500602&turno=1|2
  * Retorna o agregado municipal no mesmo formato compacto do snapshot
  * `public/maps/tse-2026-1t-presidente.json` (gerado por `npm run fetch:tse-2026`).
  */
 export const dynamic = 'force-dynamic'
 
-const ELEICAO = '6257'
+import {
+  pleitoPresidente,
+  type Turno
+} from '#/data/election'
+
 const CARGO = '0001'
-const BASE = `https://resultados.tse.jus.br/oficial/ele2026/${ELEICAO}`
+
+function baseFor(turno: Turno) {
+  const eleicao = pleitoPresidente(turno)
+  return {
+    eleicao,
+    base: `https://resultados.tse.jus.br/oficial/ele2026/${eleicao}`
+  }
+}
 
 const num = (v: unknown) => {
   if (v == null || v === '') return null
@@ -18,10 +29,13 @@ const num = (v: unknown) => {
 }
 
 /** Índice refeito a cada chamada: 100% ao vivo, sem cache. */
-async function loadMunIndex(): Promise<
+async function loadMunIndex(
+  base: string,
+  eleicao: string
+): Promise<
   Record<string, { tse: string; uf: string; nome: string }>
 > {
-  const r = await fetch(`${BASE}/config/mun-e00${ELEICAO}-cm.json`, {
+  const r = await fetch(`${base}/config/mun-e00${eleicao}-cm.json`, {
     cache: 'no-store'
   })
   if (!r.ok) throw new Error(`TSE respondeu ${r.status}`)
@@ -43,13 +57,15 @@ async function loadMunIndex(): Promise<
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const ibge = (searchParams.get('ibge') ?? '').replace(/\D/g, '')
+  const turno: Turno = searchParams.get('turno') === '2' ? 2 : 1
+  const { eleicao, base } = baseFor(turno)
 
   if (!/^\d{7}$/.test(ibge)) {
     return Response.json({ error: 'Parâmetro ibge inválido' }, { status: 400 })
   }
 
   try {
-    const idx = await loadMunIndex()
+    const idx = await loadMunIndex(base, eleicao)
     const ref = idx[ibge]
     if (!ref) {
       return Response.json(
@@ -60,7 +76,7 @@ export async function GET(request: Request) {
 
     const uf = ref.uf.toLowerCase()
     const response = await fetch(
-      `${BASE}/dados/${uf}/${uf}${ref.tse}-c${CARGO}-e00${ELEICAO}-u.json`,
+      `${base}/dados/${uf}/${uf}${ref.tse}-c${CARGO}-e00${eleicao}-u.json`,
       { cache: 'no-store' }
     )
     if (!response.ok) {
@@ -83,7 +99,7 @@ export async function GET(request: Request) {
             vap: num(c.vap) ?? 0,
             pvap: c.pvap ?? '0',
             st: c.st ?? '',
-            foto: `${BASE}/fotos/br/${c.sqcand}.jpeg`
+            foto: `${base}/fotos/br/${c.sqcand}.jpeg`
           })
         }
       }

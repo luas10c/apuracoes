@@ -15,10 +15,6 @@ import { cn } from 'tailwind-variants'
 
 import { Slot } from '#/components/Slot'
 
-/* -------------------------------------------------------------------------- */
-/*                                   Context                                  */
-/* -------------------------------------------------------------------------- */
-
 type PopoverContextValue = {
   open: boolean
   setOpen: (open: boolean) => void
@@ -37,10 +33,6 @@ function usePopoverContext(component: string) {
   }
   return ctx
 }
-
-/* -------------------------------------------------------------------------- */
-/*                                 Popover.Root                               */
-/* -------------------------------------------------------------------------- */
 
 export type PopoverRootProps = {
   open?: boolean
@@ -80,10 +72,6 @@ export function PopoverRoot({
     </PopoverContext>
   )
 }
-
-/* -------------------------------------------------------------------------- */
-/*                               Popover.Trigger                              */
-/* -------------------------------------------------------------------------- */
 
 export type PopoverTriggerProps = React.ComponentProps<'button'> & {
   asChild?: boolean
@@ -135,10 +123,6 @@ export function PopoverTrigger({
   )
 }
 
-/* -------------------------------------------------------------------------- */
-/*                               Popover.Anchor                               */
-/* -------------------------------------------------------------------------- */
-
 export type PopoverAnchorProps = React.ComponentProps<'span'> & {
   asChild?: boolean
   virtualX?: number
@@ -156,7 +140,6 @@ export function PopoverAnchor({
   const { anchorRef } = usePopoverContext('Popover.Anchor')
   const Component = asChild ? Slot : 'span'
 
-  // Âncora virtual (ponto x/y dentro de um container relativo, ex.: mapa SVG).
   if (virtualX !== undefined || virtualY !== undefined) {
     return (
       <span
@@ -181,10 +164,6 @@ export function PopoverAnchor({
   )
 }
 
-/* -------------------------------------------------------------------------- */
-/*                               Popover.Content                              */
-/* -------------------------------------------------------------------------- */
-
 export type PopoverSide = 'top' | 'right' | 'bottom' | 'left'
 export type PopoverAlign = 'start' | 'center' | 'end'
 
@@ -205,6 +184,8 @@ export type PopoverContentProps = React.ComponentProps<'div'> & {
 
 const CONTENT_WIDTH = 300
 const CONTENT_HEIGHT = 260
+/** Margem mínima entre o popover e as bordas do container. */
+const POPOVER_MARGIN = 8
 
 export function PopoverContent({
   asChild = false,
@@ -230,12 +211,13 @@ export function PopoverContent({
     null
   )
   const [resolvedSide, setResolvedSide] = useState<PopoverSide>(side)
+  // Altura máxima p/ o card nunca estourar o container (com rolagem interna).
+  const [maxHeight, setMaxHeight] = useState<number | null>(null)
 
   useEffect(() => {
     setResolvedSide(side)
   }, [side])
 
-  // Fecha com Escape / clique fora.
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
@@ -267,54 +249,105 @@ export function PopoverContent({
   useLayoutEffect(() => {
     if (!open) {
       setCoords(null)
+      setMaxHeight(null)
       return
     }
 
-    // Modo virtual: posiciona a partir de x/y (caso do mapa).
     if (x !== undefined || y !== undefined) {
       const px = x ?? 0
       const py = y ?? 0
-      const w = clampWidth ?? window.innerWidth
-      const h = clampHeight ?? window.innerHeight
+      const m = POPOVER_MARGIN
 
-      // Lado explícito (ex.: popover de badge, sempre à esquerda).
-      if (side === 'left' || side === 'right') {
-        const left =
-          side === 'left'
-            ? px - CONTENT_WIDTH - sideOffset
-            : px + sideOffset
-        let top = py - CONTENT_HEIGHT / 2
-        if (avoidCollisions) {
-          top = Math.max(8, Math.min(top, h - CONTENT_HEIGHT - 8))
+      // Mede o conteúdo real (ex.: card do exterior é mais alto que o
+      // fallback) e ancora o cálculo na interseção entre o container
+      // (offsetParent, que pode cortar com overflow hidden) e a viewport —
+      // nunca só no tamanho passado por prop, que pode estar defasado.
+      const measure = () => {
+        const el = contentRef.current
+        const host = (el?.offsetParent as HTMLElement | null) ?? null
+        const w = host?.clientWidth ?? clampWidth ?? window.innerWidth
+        const h = host?.clientHeight ?? clampHeight ?? window.innerHeight
+        const cw = el?.offsetWidth || CONTENT_WIDTH
+        // scrollHeight ignora o maxHeight aplicado: sem loop de ajuste.
+        // Soma a borda (offsetHeight - clientHeight), que o scrollHeight
+        // não inclui, para a altura bater com a caixa renderizada.
+        const borderY = el ? el.offsetHeight - el.clientHeight : 0
+        const ch = (el?.scrollHeight || CONTENT_HEIGHT) + (el ? borderY : 0)
+
+        // Faixa visível do container, em coords relativas a ele.
+        let visTop = 0
+        let visBottom = h
+        let visLeft = 0
+        let visRight = w
+        if (host) {
+          const pr = host.getBoundingClientRect()
+          visTop = Math.max(0, -pr.top)
+          visBottom = Math.min(h, window.innerHeight - pr.top)
+          visLeft = Math.max(0, -pr.left)
+          visRight = Math.min(w, window.innerWidth - pr.left)
         }
-        setResolvedSide(side)
-        setCoords({
-          left: avoidCollisions
-            ? Math.max(8, Math.min(left, w - CONTENT_WIDTH - 8))
-            : left,
-          top
-        })
-        return
+
+        // Se nem na área visível cabe, limita com rolagem interna
+        // mantendo a margem em cima e embaixo.
+        const visH = visBottom - visTop
+        const capped = ch > visH - m * 2 ? Math.max(visH - m * 2, 0) : null
+        setMaxHeight(capped)
+        const effCh = capped ?? ch
+
+        const fitVertically = (raw: number) => {
+          const lo = visTop + m
+          const hi = visBottom - effCh - m
+          if (hi < lo) return Math.max(m, Math.min(raw, h - effCh - m))
+          return Math.min(Math.max(raw, lo), hi)
+        }
+        const fitHorizontally = (raw: number) => {
+          const lo = visLeft + m
+          const hi = visRight - cw - m
+          if (hi < lo) return Math.max(m, Math.min(raw, w - cw - m))
+          return Math.min(Math.max(raw, lo), hi)
+        }
+
+        // `side` explícito tem prioridade sobre o flip.
+        if (side === 'left' || side === 'right') {
+          const left =
+            side === 'left' ? px - cw - sideOffset : px + sideOffset
+          setResolvedSide(side)
+          setCoords({
+            left: avoidCollisions ? fitHorizontally(left) : left,
+            top: fitVertically(py - effCh / 2)
+          })
+          return
+        }
+
+        const placeLeft = px > visRight - cw - 24
+        const placeAbove = py > visBottom - effCh - 24
+
+        let left = placeLeft ? px - cw - 12 : px + 16
+        let top = placeAbove ? py - effCh - 12 : py + 16
+
+        if (avoidCollisions) {
+          left = fitHorizontally(left)
+          top = fitVertically(top)
+        }
+
+        setResolvedSide(placeAbove ? 'top' : 'bottom')
+        setCoords({ left, top })
       }
 
-      // Flip horizontal/vertical para não estourar o container.
-      const placeLeft = px > w - CONTENT_WIDTH - 24
-      const placeAbove = py > h - CONTENT_HEIGHT - 24
-
-      let left = placeLeft ? px - CONTENT_WIDTH - 12 : px + 16
-      let top = placeAbove ? py - CONTENT_HEIGHT - 12 : py + 16
-
-      if (avoidCollisions) {
-        left = Math.max(8, Math.min(left, w - CONTENT_WIDTH - 8))
-        top = Math.max(8, Math.min(top, h - CONTENT_HEIGHT - 8))
+      measure()
+      window.addEventListener('resize', measure)
+      const el = contentRef.current
+      const ro =
+        el && typeof ResizeObserver !== 'undefined'
+          ? new ResizeObserver(measure)
+          : null
+      if (el && ro) ro.observe(el)
+      return () => {
+        window.removeEventListener('resize', measure)
+        ro?.disconnect()
       }
-
-      setResolvedSide(placeAbove ? 'top' : 'bottom')
-      setCoords({ left, top })
-      return
     }
 
-    // Modo âncora: mede trigger/anchor e posiciona fixed.
     const anchorEl =
       anchorRef.current ?? triggerRef.current
     if (!anchorEl) return
@@ -349,13 +382,19 @@ export function PopoverContent({
         else if (align === 'end')
           left = rect.right - cw - alignOffset
         else left = rect.left + rect.width / 2 - cw / 2 + alignOffset
-        left = Math.max(8, Math.min(left, window.innerWidth - cw - 8))
+        left = Math.max(
+          POPOVER_MARGIN,
+          Math.min(left, window.innerWidth - cw - POPOVER_MARGIN)
+        )
       } else {
         left = s === 'left' ? rect.left - cw - sideOffset : rect.right + sideOffset
         if (align === 'start') topPos = rect.top + alignOffset
         else if (align === 'end') topPos = rect.bottom - ch - alignOffset
         else topPos = rect.top + rect.height / 2 - ch / 2 + alignOffset
-        topPos = Math.max(8, Math.min(topPos, window.innerHeight - ch - 8))
+        topPos = Math.max(
+          POPOVER_MARGIN,
+          Math.min(topPos, window.innerHeight - ch - POPOVER_MARGIN)
+        )
       }
       setCoords({ left, top: topPos })
     }
@@ -400,7 +439,6 @@ export function PopoverContent({
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
       className={cn(
-        // Estilo base fiel ao shadcn + tema escuro da imagem de referência.
         'border-woodsmoke-700 bg-woodsmoke-900 text-woodsmoke-100 z-50 w-[300px] rounded-xl border p-0 shadow-2xl shadow-black/60 outline-none',
         'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
         'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95',
@@ -409,6 +447,9 @@ export function PopoverContent({
       style={{
         position: isVirtual ? 'absolute' : 'fixed',
         ...(coords ? { left: coords.left, top: coords.top } : { visibility: 'hidden' as const }),
+        ...(maxHeight != null
+          ? { maxHeight, overflowY: 'auto' as const }
+          : null),
         ...style
       }}
       {...props}
@@ -417,10 +458,6 @@ export function PopoverContent({
     </Component>
   )
 }
-
-/* -------------------------------------------------------------------------- */
-/*                        Popover.Header / Title / etc.                       */
-/* -------------------------------------------------------------------------- */
 
 export type PopoverHeaderProps = React.ComponentProps<'div'> & {
   asChild?: boolean
@@ -550,10 +587,6 @@ export function PopoverClose({
     </Component>
   )
 }
-
-/* -------------------------------------------------------------------------- */
-/*                                   Exports                                  */
-/* -------------------------------------------------------------------------- */
 
 export const Popover = {
   Root: PopoverRoot,

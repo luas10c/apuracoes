@@ -14,10 +14,6 @@ import { cn } from 'tailwind-variants'
 
 import { Slot } from '#/components/Slot'
 
-/* -------------------------------------------------------------------------- */
-/*                                   Context                                  */
-/* -------------------------------------------------------------------------- */
-
 type DropdownContextValue = {
   open: boolean
   setOpen: (open: boolean) => void
@@ -46,10 +42,6 @@ function focusables(content: HTMLElement | null): HTMLElement[] {
     )
   )
 }
-
-/* -------------------------------------------------------------------------- */
-/*                                Dropdown.Root                               */
-/* -------------------------------------------------------------------------- */
 
 export type DropdownRootProps = {
   open?: boolean
@@ -90,10 +82,6 @@ export function DropdownRoot({
     </DropdownContext>
   )
 }
-
-/* -------------------------------------------------------------------------- */
-/*                              Dropdown.Trigger                              */
-/* -------------------------------------------------------------------------- */
 
 export type DropdownTriggerProps = React.ComponentProps<'button'> & {
   asChild?: boolean
@@ -150,10 +138,6 @@ export function DropdownTrigger({
   )
 }
 
-/* -------------------------------------------------------------------------- */
-/*                              Dropdown.Content                              */
-/* -------------------------------------------------------------------------- */
-
 export type DropdownSide = 'top' | 'bottom'
 export type DropdownAlign = 'start' | 'center' | 'end'
 
@@ -187,7 +171,7 @@ export function DropdownContent({
     useDropdownContext('Dropdown.Content')
   const Component = asChild ? Slot : 'div'
 
-  // Fecha com Escape / Tab / clique fora; Escape devolve o foco ao trigger.
+  // Escape devolve o foco ao trigger.
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
@@ -261,10 +245,6 @@ export function DropdownContent({
   )
 }
 
-/* -------------------------------------------------------------------------- */
-/*                                Dropdown.Item                               */
-/* -------------------------------------------------------------------------- */
-
 export type DropdownItemProps = React.ComponentProps<'div'> & {
   asChild?: boolean
   disabled?: boolean
@@ -328,10 +308,6 @@ export function DropdownItem({
   )
 }
 
-/* -------------------------------------------------------------------------- */
-/*                               Dropdown.Label                               */
-/* -------------------------------------------------------------------------- */
-
 export type DropdownLabelProps = React.ComponentProps<'div'> & {
   asChild?: boolean
 }
@@ -356,10 +332,6 @@ export function DropdownLabel({
   )
 }
 
-/* -------------------------------------------------------------------------- */
-/*                             Dropdown.Separator                             */
-/* -------------------------------------------------------------------------- */
-
 export type DropdownSeparatorProps = React.ComponentProps<'div'> & {
   asChild?: boolean
 }
@@ -379,10 +351,6 @@ export function DropdownSeparator({
     />
   )
 }
-
-/* -------------------------------------------------------------------------- */
-/*                                   Exports                                  */
-/* -------------------------------------------------------------------------- */
 
 export const Dropdown = {
   Root: DropdownRoot,

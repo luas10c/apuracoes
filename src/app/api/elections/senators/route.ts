@@ -4,7 +4,7 @@
  *
  * GET /api/elections/senators
  * Agrega os 27 arquivos oficiais de senador, extrai os eleitos
- * (`e === 's'`) com foto e o carimbo `hg` (hora de geração) para ordenar
+ * (`st` "Eleito…") com foto e o carimbo `hg` (hora de geração) para ordenar
  * o feed. Mesmo SWR em arquivo das demais rotas
  * (`/tmp/tse-cache` + snapshot do build).
  */
@@ -98,6 +98,36 @@ type Elected = {
   vap: number
 }
 
+type Runner = {
+  sq: string
+  nmu: string
+  sg: string
+  n: string
+  vap: number
+}
+
+function extractTop(data: unknown, limit = 2): Runner[] {
+  const d = data as {
+    carg?: { agr?: { par?: { sg?: string; n?: string; cand?: Record<string, unknown>[] }[] }[] }[]
+  }
+  const list: Runner[] = []
+  for (const agr of d?.carg?.[0]?.agr ?? []) {
+    for (const par of agr?.par ?? []) {
+      for (const c of par?.cand ?? []) {
+        list.push({
+          sq: String(c.sqcand),
+          nmu: String(c.nmu ?? c.nm ?? ''),
+          sg: String(par?.sg ?? ''),
+          n: String(par?.n ?? ''),
+          vap: num(c.vap) ?? 0
+        })
+      }
+    }
+  }
+  list.sort((a, b) => b.vap - a.vap)
+  return list.slice(0, limit)
+}
+
 function extractElected(data: unknown): Elected[] {
   const d = data as {
     carg?: { agr?: { par?: { sg?: string; n?: string; cand?: Record<string, unknown>[] }[] }[] }[]
@@ -107,7 +137,7 @@ function extractElected(data: unknown): Elected[] {
     for (const par of agr?.par ?? []) {
       for (const c of par?.cand ?? []) {
         const elected =
-          c.e === 's' || /^\s*eleito\b/i.test(String(c.st ?? ''))
+          /^\s*eleit/i.test(String(c.st ?? ''))
         if (!elected) continue
         list.push({
           nmu: String(c.nmu ?? c.nm ?? ''),
@@ -128,7 +158,13 @@ type Payload = {
   meta: Record<string, unknown>
   ufs: Record<
     string,
-    { elected: Elected[]; hg: string | null; sectionsPct: number | null }
+    {
+      elected: Elected[]
+      top: Runner[]
+      vv: number | null
+      hg: string | null
+      sectionsPct: number | null
+    }
   >
 }
 
@@ -192,9 +228,12 @@ async function aggregate(): Promise<Payload> {
       const d = r.value as {
         hg?: unknown
         s?: Record<string, unknown>
+        v?: Record<string, unknown>
       }
       ufs[uf.toUpperCase()] = {
         elected: extractElected(r.value),
+        top: extractTop(r.value),
+        vv: num(d?.v?.vv),
         hg: typeof d?.hg === 'string' ? d.hg : null,
         sectionsPct: num(d?.s?.pst)
       }

@@ -1,15 +1,14 @@
 'use client'
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 
 import { motion } from 'motion/react'
 import { cn } from 'tailwind-variants'
 
 import { Popover } from './Popover'
-
-/* -------------------------------------------------------------------------- */
-/*                                    Tipos                                   */
-/* -------------------------------------------------------------------------- */
+import { PARTIES, partyColor, partyShade, partyVivid, winnerColor, WINNER_COLORS, WINNER_COLORS_LIGHT, tintWithWhite } from '#/data/parties'
+import { turnoLabel, type Turno } from '#/data/election'
 
 type LonLat = [number, number]
 
@@ -68,7 +67,6 @@ export type ExteriorSnapshot = {
   cidades: Record<string, ExteriorCityResult>
 }
 
-/** Cidade do exterior com coordenadas (public/maps/exterior-cities.json). */
 export type ExteriorPlace = {
   tse: string
   name: string
@@ -79,30 +77,62 @@ export type ExteriorPlace = {
 
 type Winner = 'flavio' | 'lula' | 'outro'
 
+/** Dados municipais de outra apuração (ex.: governador) p/ a camada de municípios. */
+export type MunicipalChoropleth = {
+  uf: string
+  fotos: string
+  candidatos: Record<string, { nmu: string; sg: string; n: string }>
+  cidades: Record<
+    string,
+    {
+      tse: string
+      n: string
+      top: { sq: string; vap: number }[]
+      vv: number | null
+      vb: number | null
+      vn: number | null
+      te: number | null
+      a: number | null
+      pst: number | null
+      st: number | null
+      ts: number | null
+    }
+  >
+}
+
 export type MapProps = {
-  /** Código IBGE do município selecionado (ou sigla da UF — compatível). */
   selected?: string | null
   onSelect?: (selection: string | null) => void
-  /**
-   * Agregado live do TSE. Quando fornecido, o Map não busca sozinho
-   * (permite compartilhar 1 único fetch com outros componentes, ex.:
-   * CommandPalette). Quando omitido, o Map busca internamente.
-   */
+  /** Fornecido = controlado (compartilha 1 fetch); omitido = busca interna. */
   results?: TseSnapshot | null
-  /** 'brasil' = municípios; 'exterior' = voto no exterior (bolhas). */
   mode?: MapMode
-  /**
-   * Agregado live do exterior (rota /api/elections/exterior).
-   * Usado quando `mode === 'exterior'`.
-   */
+  /** Turno da apuração (1 ou 2). Afeta fetches internos e rótulos. */
+  turno?: Turno
   exterior?: ExteriorSnapshot | null
-  /** Troca de abrangência (toggle Brasil/Exterior). */
   onModeChange?: (mode: MapMode) => void
-  /** Filtro de visualização (tabs Municípios/Estados/Vantagem/Apurado/Candidato). */
   mapView?: MapView
-  /** sqcand do candidato focado na view 'candidato'. */
   candidateSq?: string | null
   className?: string
+  /** Filtros de view (barra acima do mapa, no lugar das abas Brasil/Exterior). */
+  filters?: ReactNode
+  /** Pintura por UF p/ outras apurações (ex.: Senado): desliga o popover. */
+  choropleth?: {
+    fills: Record<string, string>
+    soft?: string[]
+    split?: Record<string, [string, string]>
+    photos?: Record<string, string[]>
+    labels?: Record<string, string>
+    legend?: ReactNode
+  } | null
+  suppressPopover?: boolean
+  /** Popover custom por UF (ex.: senadores eleitos). Substitui o padrão. */
+  statePopover?: ((sigla: string) => ReactNode) | null
+  /**
+   * Choropleth municipal alternativo (ex.: governador por município).
+   * Quando presente, os municípios da UF usam estes dados (cor do partido
+   * com variação por margem) em vez do snapshot presidencial.
+   */
+  municipalChoropleth?: MunicipalChoropleth | null
 }
 
 type HoverState = {
@@ -111,10 +141,6 @@ type HoverState = {
   x: number
   y: number
 }
-
-/* -------------------------------------------------------------------------- */
-/*              Resultados AO VIVO — TSE 2026, 1º turno, Presidente           */
-/* -------------------------------------------------------------------------- */
 
 export type TseCandidate = {
   sq: string
@@ -144,8 +170,7 @@ export type TseCity = TsePlace & {
   tse: string
   n: string
   uf: string
-  /** Todos os candidatos [[sq, vap], ...] para calor por candidato. */
-  all?: [string, number][]
+    all?: [string, number][]
 }
 
 export type TseSnapshot = {
@@ -163,18 +188,16 @@ export type TseSnapshot = {
     revalidating?: boolean
   }
   nacional: TsePlace & { full?: { sq: string; vap: number }[] }
-  /** Registro global sq → dados do candidato (para a view por candidato). */
-  candidatos?: Record<string, { nmu: string; sg: string; n: string }>
+    candidatos?: Record<string, { nmu: string; sg: string; n: string }>
   ufs: Record<string, TsePlace>
   cidades: Record<string, TseCity>
 }
 
-/** Modo de visualização do mapa (filtros do topo). */
 export type MapView = 'municipios' | 'estados' | 'vantagem' | 'apurado' | 'candidato'
 
 /** Agregado live servido pela rota /api/elections/municipalities. Sem cache: busca fresco no TSE a cada montagem. */
-function loadResults(): Promise<TseSnapshot | null> {
-  return fetch('/api/elections/municipalities', { cache: 'no-store' })
+function loadResults(turno: Turno): Promise<TseSnapshot | null> {
+  return fetch(`/api/elections/municipalities?turno=${turno}`, { cache: 'no-store' })
     .then((r) => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       return r.json()
@@ -214,13 +237,11 @@ function loadPast(): Promise<PastSnapshot | null> {
   return pastPromise
 }
 
-/** % de votos a partir de votos/válidos (mesma conta do TSE). */
 function share(vap: number, vv: number | null): number {
   if (!vv || vv <= 0) return 0
   return Math.round((vap / vv) * 1000) / 10
 }
 
-/** Vencedor por identidade: os 2 primeiros no país definem azul/vermelho. */
 function winnerOf(
   sq: string,
   firstSq: string | undefined,
@@ -231,21 +252,14 @@ function winnerOf(
   return 'outro'
 }
 
-/**
- * Identidade fixa por partido (uso no exterior): o ranking nacional muda
- * fora do Brasil (Lula lidera), então a cor é ancorada na sigla —
- * PL (Flávio) = azul, PT (Lula) = vermelho — e não na posição.
- */
+/** Cor ancorada na sigla (fora do Brasil o ranking muda de ordem). */
 function winnerByParty(sg: string): Winner {
   if (sg === 'PL') return 'flavio'
   if (sg === 'PT') return 'lula'
   return 'outro'
 }
 
-// (mock anterior removido: os dados agora vêm ao vivo do TSE)
-
-/** UFs com chamada lateral (como na imagem) em vez de rótulo interno. */
-const SIDE_UFS = ['RN', 'PB', 'PE', 'AL', 'SE', 'ES', 'RJ'] as const
+const SIDE_UFS = ['RN', 'PB', 'PE', 'AL', 'SE', 'DF', 'ES', 'RJ'] as const
 
 /** Layout vertical das badges laterais: NE junto, respiro antes do Sudeste. */
 const BADGE_NE_TOP = 140
@@ -254,11 +268,7 @@ const BADGE_SE_TOP = 384
 const BADGE_SE_GAP = 40
 const badgeY = (i: number) =>
   i < 5 ? BADGE_NE_TOP + i * BADGE_NE_GAP : BADGE_SE_TOP + (i - 5) * BADGE_SE_GAP
-const GLOBE_Y = BADGE_SE_TOP + 2 * BADGE_SE_GAP + 44
-
-/* -------------------------------------------------------------------------- */
-/*                                 Geo helpers                                */
-/* -------------------------------------------------------------------------- */
+const GLOBE_Y = BADGE_SE_TOP + (SIDE_UFS.length - 5) * BADGE_SE_GAP + 44
 
 const VIEW_W = 1000
 const VIEW_H = 700
@@ -266,11 +276,6 @@ const MAP_W = 730
 const MAP_H = 660
 const MAP_PAD = 12
 
-/**
- * Transform de viewport (zoom/pan futuro). Hoje sempre identidade: o zoom
- * será aplicado como `transform` CSS no `<g>` das camadas (compositado na
- * GPU, sem re-render) e o picking usará `unprojectLonLat` abaixo.
- */
 export type MapViewTransform = {
   scale: number
   tx: number
@@ -291,6 +296,42 @@ type ProjectionParams = {
 
 const round1 = (v: number) => Math.round(v * 10) / 10
 
+/**
+ * Bbox de um path SVG no espaço do viewBox. Usado para detectar
+ * municípios pequenos demais para o contorno branco de realce: o traço
+ * interno (2–2,4px fixos na tela) cobriria o polígono inteiro e viraria
+ * um "ponto branco" em vez de contorno.
+ */
+function pathBBox(d: string): {
+  minX: number
+  maxX: number
+  minY: number
+  maxY: number
+} | null {
+  let minX = Infinity
+  let maxX = -Infinity
+  let minY = Infinity
+  let maxY = -Infinity
+  const re = /(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/g
+  let m: RegExpExecArray | null
+  let found = false
+  while ((m = re.exec(d)) !== null) {
+    const x = Number(m[1])
+    const y = Number(m[2])
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue
+    found = true
+    if (x < minX) minX = x
+    if (x > maxX) maxX = x
+    if (y < minY) minY = y
+    if (y > maxY) maxY = y
+  }
+  if (!found) return null
+  return { minX, maxX, minY, maxY }
+}
+
+/** Menor dimensão em tela (px) abaixo da qual o realce vira um ponto. */
+const HIGHLIGHT_DOT_PX = 8
+
 function projectLonLat(
   p: ProjectionParams,
   lon: number,
@@ -302,7 +343,6 @@ function projectLonLat(
   return [round1(x * view.scale + view.tx), round1(y * view.scale + view.ty)]
 }
 
-/** Inverso da projeção: ponto da tela -> lon/lat (picking futuro do zoom/pan). */
 export function unprojectLonLat(
   p: ProjectionParams,
   x: number,
@@ -317,10 +357,6 @@ export function unprojectLonLat(
   ]
 }
 
-/* -------------------------------------------------------------------------- */
-/*                          View (zoom/pan) — helpers                          */
-/* -------------------------------------------------------------------------- */
-
 export type ViewState = {
   scale: number
   tx: number
@@ -330,22 +366,28 @@ export type ViewState = {
 const IDENTITY_ZOOM: ViewState = { scale: 1, tx: 0, ty: 0 }
 const MIN_SCALE = 1
 const MAX_SCALE = 8
-/** Centro da área do mapa (região 0..MAP_W) em coords do viewBox. */
 const MAP_CENTER: [number, number] = [MAP_W / 2, MAP_H / 2]
 
-/** Limita pan para o mapa não fugir da viewport. */
-function clampView(v: ViewState): ViewState {
+function clampView(
+  v: ViewState,
+  box: { x0: number; y0: number; w: number; h: number } = BR_BOX
+): ViewState {
   if (v.scale <= MIN_SCALE) return { ...IDENTITY_ZOOM }
   const s = Math.min(Math.max(v.scale, MIN_SCALE), MAX_SCALE)
   const margin = 120
   return {
     scale: s,
-    tx: Math.min(Math.max(v.tx, VIEW_W - MAP_W * s - margin), margin),
-    ty: Math.min(Math.max(v.ty, VIEW_H - MAP_H * s - margin), margin)
+    tx: Math.min(
+      Math.max(v.tx, VIEW_W - (box.x0 + box.w) * s - margin),
+      -box.x0 * s + margin
+    ),
+    ty: Math.min(
+      Math.max(v.ty, VIEW_H - (box.y0 + box.h) * s - margin),
+      -box.y0 * s + margin
+    )
   }
 }
 
-/** Ponto do cursor (client) -> coords do viewBox, respeitando o `meet`. */
 function clientToViewBox(
   rect: { left: number; top: number; width: number; height: number },
   clientX: number,
@@ -357,7 +399,6 @@ function clientToViewBox(
   return [(clientX - rect.left - ox) / s, (clientY - rect.top - oy) / s]
 }
 
-/** Ponto do viewBox -> coords relativas ao wrapper (âncora do popover). */
 function viewBoxToWrap(
   svgRect: { left: number; top: number; width: number; height: number },
   wrapRect: { left: number; top: number },
@@ -373,7 +414,6 @@ function viewBoxToWrap(
   ]
 }
 
-/** Tween com easeOutCubic; retorna função de cancelamento. */
 function tweenView(
   from: ViewState,
   to: ViewState,
@@ -429,18 +469,13 @@ const fmtPct = (v: number) => `${v.toFixed(1).replace('.', ',')}%`
 const fmtInt = (v: number | null) =>
   v == null ? '–' : new Intl.NumberFormat('pt-BR').format(v)
 
-/** "FLAVIO BOLSONARO" -> "Flavio Bolsonaro" (nomes do TSE vêm em maiúsculas). */
 function toTitle(name: string): string {
   return name
     .toLowerCase()
     .replace(/(?:^|\s|-|')(.)/g, (m) => m.toUpperCase())
 }
 
-/**
- * Cor pela MARGEM em pontos percentuais (1º − 2º colocado), estrita à
- * referência: disputa acirrada (até 10) = tom escuro, lavada = tom vivo.
- * Azul = PL (Flávio), vermelho = PT (Lula), cinza = outro vencedor.
- */
+/** Cor pela margem 1º−2º (acirrada = escuro, lavada = vivo). */
 function fillFor(winner: Winner, margin: number): string {
   if (winner === 'flavio') {
     if (margin > 45) return '#3b82f6'
@@ -460,19 +495,11 @@ function fillFor(winner: Winner, margin: number): string {
   return '#27272a'
 }
 
-/**
- * Tons da label do topo (estritos às imagens de referência):
- * 4 tons por partido — escuro (até 10) → vivo (mais pontos).
- */
 const BLUE_RAMP = ['#1e3a8a', '#1e40af', '#2563eb', '#3b82f6'] as const
 const RED_RAMP = ['#7f1d1d', '#991b1b', '#dc2626', '#ef4444'] as const
 const GRAY_RAMP = ['#27272a', '#3f3f46', '#52525b', '#71717a'] as const
 
-const WINNER_ACCENT: Record<Winner, string> = {
-  flavio: '#5b8def',
-  lula: '#f87171',
-  outro: '#9ca3af'
-}
+const WINNER_ACCENT: Record<Winner, string> = WINNER_COLORS
 
 const WINNER_SG: Record<Winner, string> = {
   flavio: 'PL',
@@ -486,20 +513,17 @@ function rampOf(winner: Winner): readonly string[] {
   return GRAY_RAMP
 }
 
-/** Rampas monocromáticas da view por candidato (claro → vivo por %). */
 const CAND_BLUE = ['#172554', '#1e3a8a', '#1d4ed8', '#3b82f6'] as const
 const CAND_RED = ['#450a0a', '#7f1d1d', '#b91c1c', '#ef4444'] as const
 const CAND_GOLD = ['#422006', '#713f12', '#a16207', '#eab308'] as const
 const APURADO_RAMP = ['#2a2a2e', '#55555e', '#8a8a95', '#b9b9c2', '#d6d6db'] as const
 
-/** Rampa pelo partido do candidato focado (PL azul, PT vermelho, resto ouro). */
 function candidateRamp(sg: string | undefined): readonly string[] {
   if (sg === 'PT') return CAND_RED
   if (sg !== 'PL') return CAND_GOLD
   return CAND_BLUE
 }
 
-/** Cor monocromática por % (4 faixas). */
 function shadeFor(
   ramp: readonly string[],
   pct: number,
@@ -511,7 +535,6 @@ function shadeFor(
   return ramp[0]
 }
 
-/** Cinza por % apurado. */
 function apuradoFill(pst: number | null): string {
   const p = pst ?? 0
   if (p >= 99.5) return '#d6d6db'
@@ -534,7 +557,6 @@ function fmtPctShort(v: number): string {
   return `${v.toFixed(1).replace('.', ',')}%`
 }
 
-/** Menor % municipal do candidato focado (texto "menos de X%"). */
 function minCandShareText(
   snapshot: TseSnapshot | null,
   sq: string | undefined
@@ -553,7 +575,6 @@ function minCandShareText(
     : String(Math.floor(min))
 }
 
-/** Margem em pontos entre os 2 primeiros (mesma conta do % exibido). */
 function marginOf(
   top: { vap: number }[],
   vv: number | null
@@ -563,10 +584,6 @@ function marginOf(
   const second = top.length > 1 ? share(top[1].vap, vv) : 0
   return Math.round((first - second) * 10) / 10
 }
-
-/* -------------------------------------------------------------------------- */
-/*                           Resultado por município                          */
-/* -------------------------------------------------------------------------- */
 
 export type CityCandidate = {
   name: string
@@ -604,11 +621,9 @@ export type PastCandidate = {
 export type PastResult = {
   year: number
   candidates: PastCandidate[]
-  /** Variação 2026−2022 em pontos por candidato (chave = nome 2026). */
-  variation: { name: string; delta: number }[]
+    variation: { name: string; delta: number }[]
 }
 
-/** Monta o resultado da cidade a partir do snapshot live do TSE. */
 function getCityResult(
   snapshot: TseSnapshot,
   past: PastSnapshot | null,
@@ -622,10 +637,8 @@ function getCityResult(
   const secondSq = snapshot.nacional.top[1]?.sq
   const photo = (sq: string) =>
     snapshot.meta.fotos.replace('{sqcand}', sq)
-  const accentOf = (w: Winner) =>
-    w === 'flavio' ? '#5b8def' : w === 'lula' ? '#f87171' : '#9ca3af'
-  const accentOfSg = (sg: string) =>
-    sg === 'PL' ? '#5b8def' : sg === 'PT' ? '#f87171' : '#9ca3af'
+  const accentOf = (w: Winner) => winnerColor(w)
+  const accentOfSg = (sg: string) => partyColor(sg)
   const candidates = c.top.slice(0, 2).map((t) => {
     const winner = winnerOf(t.sq, firstSq, secondSq)
     return {
@@ -655,12 +668,50 @@ function getCityResult(
   }
 }
 
-/** Rótulo curto da variação: sempre a sigla do partido (ex.: PT, PL). */
 function varLabel(party: string): string {
   return party.split(' ')[0] ?? party
 }
 
-/** Compara top-2 2026 × top-2 2022 (mesmo número de urna) → deltas em pontos. */
+/** CityResult a partir do choropleth municipal alternativo (ex.: governador). */
+function getGovCityResult(
+  mc: MunicipalChoropleth,
+  code: string,
+  fallbackName: string
+): CityResult | null {
+  const c = mc.cidades[code]
+  if (!c || c.top.length === 0) return null
+  const photo = (sq: string) =>
+    mc.fotos.replace('{uf}', mc.uf.toLowerCase()).replace('{sqcand}', sq)
+  const candidates = c.top.slice(0, 2).map((t) => {
+    const info = mc.candidatos[t.sq]
+    const sg = info?.sg ?? ''
+    return {
+      name: toTitle(info?.nmu ?? t.sq),
+      party: `${sg} ${info?.n ?? ''}`.trim(),
+      number: info?.n ?? '',
+      votes: t.vap,
+      pct: share(t.vap, c.vv),
+      photo: photo(t.sq),
+      accent: partyVivid(sg),
+      winner: 'outro' as Winner
+    }
+  })
+  return {
+    code,
+    name: toTitle(c.n || fallbackName),
+    uf: mc.uf,
+    sectionsPct: c.pst,
+    sectionsDone: c.st,
+    sectionsTotal: c.ts,
+    validVotes: c.vv,
+    brancos: c.vb ?? null,
+    nulos: c.vn ?? null,
+    abstencoes: c.a ?? null,
+    candidates,
+    past: null
+  }
+}
+
 function buildPast(
   pastTop: PastTopCandidate[] | null,
   candidates: CityCandidate[],
@@ -688,7 +739,6 @@ function buildPast(
   return { year: 2022, candidates: pastCandidates, variation }
 }
 
-/** Resultado do estado a partir do agregado live (mesmo card do mapa). */
 function getStateResult(
   snapshot: TseSnapshot,
   past: PastSnapshot | null,
@@ -702,8 +752,7 @@ function getStateResult(
   if (!place || place.top.length === 0) return null
   const firstSq = snapshot.nacional.top[0]?.sq
   const secondSq = snapshot.nacional.top[1]?.sq
-  const accentOf = (w: Winner) =>
-    w === 'flavio' ? '#5b8def' : w === 'lula' ? '#f87171' : '#9ca3af'
+  const accentOf = (w: Winner) => winnerColor(w)
   const candidates = place.top.slice(0, 2).map((t) => {
     const winner = winnerOf(t.sq, firstSq, secondSq)
     return {
@@ -729,15 +778,11 @@ function getStateResult(
     nulos: place.vn ?? null,
     abstencoes: place.a ?? null,
     candidates,
-    past: buildPast(past?.ufs[sigla]?.top ?? null, candidates, (sg) =>
-      sg === 'PL' ? '#5b8def' : sg === 'PT' ? '#f87171' : '#9ca3af'
+      past: buildPast(past?.ufs[sigla]?.top ?? null, candidates, (sg) =>
+      partyColor(sg)
     )
   }
 }
-
-/* -------------------------------------------------------------------------- */
-/*                        Card do popover (fiel à imagem)                     */
-/* -------------------------------------------------------------------------- */
 
 function CandidatePhoto({ name, src }: { name: string; src: string }) {
   const [failed, setFailed] = useState(false)
@@ -774,7 +819,7 @@ function CityPopoverCard({ city }: { city: CityResult }) {
   const sectionsLabel =
     city.sectionsPct != null
       ? `${String(city.sectionsPct).replace('.', ',')}% das seções`
-      : 'Apuração TSE 2026 · 1º turno'
+      : 'Apuração TSE 2026'
 
   return (
     <motion.div
@@ -889,10 +934,6 @@ function CityPopoverCard({ city }: { city: CityResult }) {
   )
 }
 
-/* -------------------------------------------------------------------------- */
-/*              Camada de municípios isolada (não re-renderiza no hover)      */
-/* -------------------------------------------------------------------------- */
-
 type MunicipalityPath = {
   code: string
   uf: string
@@ -900,27 +941,84 @@ type MunicipalityPath = {
   fill: string
 }
 
-/** CSS estático fora do render: highlight de hover 100% via CSS, sem React. */
-const MAP_LAYER_CSS = `.map-city{cursor:pointer}.map-city:hover{stroke:#fff!important;stroke-width:1.4!important}.map-panning,.map-panning *{cursor:grabbing!important}`
+/** Cursor via CSS; o realce de hover/seleção é clipado p/ dentro (sem vazar). */
+const MAP_LAYER_CSS = `.map-city{cursor:pointer}.map-panning,.map-panning *{cursor:grabbing!important}`
 
-/**
- * Os 5,7k paths vivem aqui. Como as props são estáveis (array memoizado +
- * apenas `selectedCode`, que só muda no clique), o hover do mouse — que
- * atualiza estado no componente pai — nunca reconcilia essa subárvore.
- */
 const MunicipalitiesLayer = memo(function MunicipalitiesLayer({
   paths,
   selectedCode,
-  focusUf
+  focusUf,
+  scale
 }: {
   paths: MunicipalityPath[]
   selectedCode: string | null
   focusUf?: string | null
+  scale: number
 }) {
   return (
     <g>
       {paths.map((m) => {
         if (focusUf && m.uf !== focusUf) return null
+        if (selectedCode === m.code) {
+          const box = pathBBox(m.d)
+          const tiny =
+            box != null &&
+            Math.min(box.maxX - box.minX, box.maxY - box.minY) * scale <
+              HIGHLIGHT_DOT_PX
+          if (tiny && box) {
+            return (
+              <g key={m.code}>
+                <path
+                  d={m.d}
+                  data-city={m.code}
+                  data-uf={m.uf}
+                  fill={m.fill}
+                  fillOpacity={0.92}
+                  stroke="rgba(0,0,0,0.35)"
+                  strokeWidth={0.3}
+                  strokeLinejoin="round"
+                  className="map-city"
+                  vectorEffect="non-scaling-stroke"
+                >
+                  <title>{m.code}</title>
+                </path>
+                <circle
+                  cx={(box.minX + box.maxX) / 2}
+                  cy={(box.minY + box.maxY) / 2}
+                  r={3 / scale}
+                  fill="#fff"
+                  pointerEvents="none"
+                />
+              </g>
+            )
+          }
+          return (
+            <g key={m.code}>
+              <clipPath id={`mclip-${m.code}`}>
+                <path d={m.d} />
+              </clipPath>
+              <path
+                d={m.d}
+                data-city={m.code}
+                data-uf={m.uf}
+                fill={m.fill}
+                fillOpacity={0.92}
+                stroke="none"
+                className="map-city"
+              />
+              <path
+                d={m.d}
+                fill="none"
+                stroke="#fff"
+                strokeWidth={2.4}
+                strokeLinejoin="round"
+                clipPath={`url(#mclip-${m.code})`}
+                vectorEffect="non-scaling-stroke"
+                pointerEvents="none"
+              />
+            </g>
+          )
+        }
         return (
           <path
             key={m.code}
@@ -934,11 +1032,6 @@ const MunicipalitiesLayer = memo(function MunicipalitiesLayer({
             strokeLinejoin="round"
             className="map-city"
             vectorEffect="non-scaling-stroke"
-            style={
-              selectedCode === m.code
-                ? { stroke: '#fff', strokeWidth: 1.6 }
-                : undefined
-            }
           />
         )
       })}
@@ -954,7 +1047,6 @@ export type MapSpike = {
   fill: string
 }
 
-/** Spikes da view Vantagem (1 linha por município, altura ∝ √margem). */
 const SpikesLayer = memo(function SpikesLayer({
   spikes,
   selectedCode
@@ -989,14 +1081,14 @@ const SpikesLayer = memo(function SpikesLayer({
   )
 })
 
-/* -------------------------------------------------------------------------- */
-/*                    Modo exterior: projeção + bolhas                         */
-/* -------------------------------------------------------------------------- */
-
-/** Equiretangular 2:1 centralizado no viewBox 1000x700. */
 const WORLD_W = 1000
 const WORLD_H = 500
 const WORLD_Y0 = 100
+
+/** Caixa do conteúdo p/ o clamp do pan/zoom (Brasil ou mundo). */
+const BR_BOX = { x0: 0, y0: 0, w: MAP_W, h: MAP_H }
+const WORLD_BOX = { x0: 0, y0: WORLD_Y0, w: WORLD_W, h: WORLD_H }
+const WORLD_CENTER: [number, number] = [WORLD_W / 2, WORLD_Y0 + WORLD_H / 2]
 
 function projectWorld(lon: number, lat: number): [number, number] {
   return [
@@ -1071,15 +1163,32 @@ const ExteriorDotsLayer = memo(function ExteriorDotsLayer({
   )
 })
 
-/** CityResult de uma cidade do exterior (mesmo card do popover). */
 function getExteriorCityResult(
   snapshot: ExteriorSnapshot,
-  place: ExteriorPlace
+  place: ExteriorPlace,
+  past: PastSnapshot | null
 ): CityResult | null {
   const c = snapshot.cidades[place.tse]
   if (!c || c.top.length === 0) return null
-  const accentOf = (w: Winner) =>
-    w === 'flavio' ? '#5b8def' : w === 'lula' ? '#f87171' : '#9ca3af'
+  const accentOf = (w: Winner) => winnerColor(w)
+  const candidates = c.top.slice(0, 2).map((t) => {
+    const winner = winnerByParty(t.sg)
+    return {
+      name: toTitle(t.nmu),
+      party: `${t.sg} ${t.n}`.trim(),
+      number: t.n,
+      votes: t.vap,
+      pct: share(t.vap, c.vv),
+      photo: snapshot.meta.fotos.replace('{sqcand}', t.sq),
+      accent: accentOf(winner),
+      winner
+    }
+  })
+  const pastCity = past?.exterior?.[place.tse]
+  const pastTop: PastTopCandidate[] =
+    pastCity?.top
+      .filter((p) => p.n === '22' || p.n === '13')
+      .map((p) => ({ nmu: p.nmu, sg: p.sg, n: p.n, vap: p.vap, pct: p.pct })) ?? []
   return {
     code: place.tse,
     name: toTitle(place.name),
@@ -1091,35 +1200,19 @@ function getExteriorCityResult(
     brancos: c.vb ?? null,
     nulos: c.vn ?? null,
     abstencoes: c.a ?? null,
-    candidates: c.top.slice(0, 2).map((t) => {
-      const winner = winnerByParty(t.sg)
-      return {
-        name: toTitle(t.nmu),
-        party: `${t.sg} ${t.n}`.trim(),
-        number: t.n,
-        votes: t.vap,
-        pct: share(t.vap, c.vv),
-        photo: snapshot.meta.fotos.replace('{sqcand}', t.sq),
-        accent: accentOf(winner),
-        winner
-      }
-    }),
-    past: null
+    candidates,
+    past: buildPast(pastTop, candidates, partyColor)
   }
 }
 
-/**
- * Agregado do voto no exterior (badge 🌐): top-2 do total ZZ,
- * 2022 agregado por partido (PL 22 × PT 13) e variação em pontos.
- */
+/** Agregado do voto no exterior p/ o popover do globo. */
 function getExteriorAggregateResult(
   snapshot: ExteriorSnapshot,
   past: PastSnapshot | null
 ): CityResult | null {
   const total = snapshot.total
   if (!total || total.top.length === 0) return null
-  const accentOf = (w: Winner) =>
-    w === 'flavio' ? '#5b8def' : w === 'lula' ? '#f87171' : '#9ca3af'
+  const accentOf = (w: Winner) => winnerColor(w)
   const candidates = total.top.slice(0, 2).map((t) => {
     const winner = winnerByParty(t.sg)
     return {
@@ -1169,15 +1262,9 @@ function getExteriorAggregateResult(
     nulos: total.vn ?? null,
     abstencoes: total.a ?? null,
     candidates,
-    past: buildPast(pastTop, candidates, (sg) =>
-      sg === 'PL' ? '#5b8def' : sg === 'PT' ? '#f87171' : '#9ca3af'
-    )
+    past: buildPast(pastTop, candidates, (sg) => partyColor(sg))
   }
 }
-
-/* -------------------------------------------------------------------------- */
-/*                                    Map                                     */
-/* -------------------------------------------------------------------------- */
 
 type NameIndex = Record<string, { n: string; u: string }>
 
@@ -1230,12 +1317,11 @@ function loadStates(): Promise<StateFeature[]> {
   return statesPromise
 }
 
-let exteriorAggPromise: Promise<ExteriorSnapshot | null> | null = null
+let exteriorAggPromises: Partial<Record<Turno, Promise<ExteriorSnapshot | null>>> = {}
 
-/** Agregado do exterior p/ o popover do globo (lazy, 1 único fetch). */
-function loadExteriorAgg(): Promise<ExteriorSnapshot | null> {
-  if (!exteriorAggPromise) {
-    exteriorAggPromise = fetch('/api/elections/exterior', {
+function loadExteriorAgg(turno: Turno): Promise<ExteriorSnapshot | null> {
+  if (!exteriorAggPromises[turno]) {
+    exteriorAggPromises[turno] = fetch(`/api/elections/exterior?turno=${turno}`, {
       cache: 'no-store'
     })
       .then((r) => {
@@ -1245,7 +1331,7 @@ function loadExteriorAgg(): Promise<ExteriorSnapshot | null> {
       .then((d) => d as ExteriorSnapshot)
       .catch(() => null)
   }
-  return exteriorAggPromise
+  return exteriorAggPromises[turno]!
 }
 
 let worldPromise: Promise<WorldFeature[]> | null = null
@@ -1277,7 +1363,7 @@ function loadExteriorPlaces(): Promise<ExteriorPlace[]> {
   return exteriorPlacesPromise
 }
 
-export function Map({ selected, onSelect, results, mode = 'brasil', exterior, onModeChange, mapView = 'municipios', candidateSq = null, className }: MapProps) {
+export function Map({ selected, onSelect, results, mode = 'brasil', turno = 1, exterior, onModeChange, mapView = 'municipios', candidateSq = null, className, filters, choropleth = null, suppressPopover = false, statePopover = null, municipalChoropleth = null }: MapProps) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
   const closeTimer = useRef<number | null>(null)
@@ -1309,10 +1395,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
   /** Controlado (via prop) ou interno: 1 única fonte de verdade. */
   const snapshot = results !== undefined ? results : internalResults
   const [hover, setHover] = useState<HoverState | null>(null)
-  /**
-   * Hover nas badges laterais/globo: { kind, sigla?, x, y } em coords do
-   * wrapper (âncora do popover). Independente do hover do mapa.
-   */
   const [badgeHover, setBadgeHover] = useState<
     | { kind: 'state'; sigla: string; x: number; y: number }
     | { kind: 'globe'; x: number; y: number }
@@ -1339,26 +1421,35 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     }
   }, [])
 
+  /** Clamp do pan/zoom na caixa do conteúdo do modo atual. */
+  const clampMode = useCallback(
+    (v: ViewState) => clampView(v, mode === 'exterior' ? WORLD_BOX : BR_BOX),
+    [mode]
+  )
+
   const animateViewTo = useCallback(
     (to: ViewState, duration = 450) => {
       stopAnim()
       const from = viewRef.current
-      animCancel.current = tweenView(from, clampView(to), duration, applyView)
+      animCancel.current = tweenView(from, clampMode(to), duration, applyView)
     },
-    [applyView, stopAnim]
+    [applyView, stopAnim, clampMode]
   )
 
   const resolvedSelected = selected ?? internalSelected
 
   useEffect(() => {
     let alive = true
+    // Comparativo 2022 existe só para o 1º turno (fase 2 cobre o 2T).
+    const pastTask =
+      turno === 1 ? loadPast() : Promise.resolve(null)
     Promise.all([
       loadMunicipalities(),
       loadMunicipalityIndex(),
       loadStates(),
       loadWorld(),
       loadExteriorPlaces(),
-      loadPast()
+      pastTask
     ]).then(([mun, idx, states, world, places, pastSnap]) => {
       if (!alive) return
       setMunicipalities(mun)
@@ -1372,34 +1463,36 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     return () => {
       alive = false
     }
-  }, [])
+  }, [turno])
 
-  // Cor da badge globo: agregado do exterior (lazy, 1 único fetch).
   useEffect(() => {
     if (mode !== 'brasil' || exterior || globeData) return
     let alive = true
-    loadExteriorAgg().then((s) => {
+    loadExteriorAgg(turno).then((s) => {
       if (alive && s) setGlobeData(s)
     })
     return () => {
       alive = false
     }
-  }, [mode, exterior, globeData])
+  }, [mode, exterior, globeData, turno])
 
-  // Busca interna do agregado live — só no modo não-controlado.
+  // Troca de turno: descarta o agregado interno do turno anterior.
+  useEffect(() => {
+    setGlobeData(null)
+  }, [turno])
+
   useEffect(() => {
     if (results !== undefined) return
     let alive = true
-    loadResults().then((snap) => {
+    loadResults(turno).then((snap) => {
       if (!alive) return
       if (snap) {
         setInternalResults(snap)
       } else {
         setResultsError(true)
-        // Uma nova tentativa silenciosa (TSE pode oscilar no pico).
         window.setTimeout(() => {
           if (!alive) return
-          loadResults().then((retry) => {
+          loadResults(turno).then((retry) => {
             if (!alive || !retry) return
             setInternalResults(retry)
             setResultsError(false)
@@ -1410,7 +1503,7 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     return () => {
       alive = false
     }
-  }, [results])
+  }, [results, turno])
 
   useEffect(() => {
     const el = wrapRef.current
@@ -1427,7 +1520,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     if (selected !== undefined) setInternalSelected(selected)
   }, [selected])
 
-  // Cancela hover/animação pendentes ao desmontar.
   useEffect(
     () => () => {
       if (hoverRaf.current) cancelAnimationFrame(hoverRaf.current)
@@ -1438,10 +1530,8 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     []
   )
 
-  /* Projeção lon/lat -> coordenadas do viewBox (área do mapa). */
   const projection = useMemo(() => {
-    // Antes das UFs carregarem (/maps/brazil-states.json), usa o bbox
-    // aproximado do Brasil para não gerar NaN nos paths.
+    // Bbox aproximado até as UFs carregarem (evita NaN).
     const bbox =
       stateFeatures.length > 0
         ? computeBbox(stateFeatures)
@@ -1486,39 +1576,93 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     return parts.join('')
   }
 
-  /* Centroide (bbox do maior polígono) de cada UF — âncora de rótulos/linhas. */
   const stateAnchors = useMemo(() => {
     const { project } = projection
     const anchors: Record<string, { x: number; y: number }> = {}
-    for (const f of stateFeatures) {
-      const boxes: { area: number; cx: number; cy: number }[] = []
-      eachRing(f.geometry, (ring) => {
-        let minX = Infinity
-        let maxX = -Infinity
-        let minY = Infinity
-        let maxY = -Infinity
-        for (const [lon, lat] of ring) {
-          const [x, y] = project(lon, lat)
-          if (x < minX) minX = x
-          if (x > maxX) maxX = x
-          if (y < minY) minY = y
-          if (y > maxY) maxY = y
-        }
-        boxes.push({
-          area: (maxX - minX) * (maxY - minY),
-          cx: (minX + maxX) / 2,
-          cy: (minY + maxY) / 2
-        })
-      })
-      boxes.sort((a, b) => b.area - a.area)
-      if (boxes[0]) {
-        anchors[f.properties.sigla] = { x: boxes[0].cx, y: boxes[0].cy }
+    const polysOf = (g: GeoGeometry): LonLat[][][] => {
+      if (g.type === 'Polygon') return [g.coordinates]
+      return g.coordinates
+    }
+    const shoelace = (ring: [number, number][]) => {
+      let a = 0
+      let cx = 0
+      let cy = 0
+      for (let i = 0; i < ring.length; i++) {
+        const [x0, y0] = ring[i]
+        const [x1, y1] = ring[(i + 1) % ring.length]
+        const cross = x0 * y1 - x1 * y0
+        a += cross
+        cx += (x0 + x1) * cross
+        cy += (y0 + y1) * cross
       }
+      return { area: a / 2, cx: cx / (6 * (a || 1)), cy: cy / (6 * (a || 1)) }
+    }
+    const inside = (x: number, y: number, ring: [number, number][]) => {
+      let c = false
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const [xi, yi] = ring[i]
+        const [xj, yj] = ring[j]
+        if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) {
+          c = !c
+        }
+      }
+      return c
+    }
+    for (const f of stateFeatures) {
+      let best: { ring: [number, number][]; area: number } | null = null
+      for (const poly of polysOf(f.geometry)) {
+        if (poly.length === 0) continue
+        const ring = poly[0].map(
+          ([lon, lat]) => project(lon, lat) as [number, number]
+        )
+        if (ring.length < 3) continue
+        const { area } = shoelace(ring)
+        if (!best || Math.abs(area) > Math.abs(best.area)) {
+          best = { ring, area }
+        }
+      }
+      if (!best) continue
+      const { cx, cy } = shoelace(best.ring)
+      let minX = Infinity
+      let maxX = -Infinity
+      let minY = Infinity
+      let maxY = -Infinity
+      for (const [x, y] of best.ring) {
+        if (x < minX) minX = x
+        if (x > maxX) maxX = x
+        if (y < minY) minY = y
+        if (y > maxY) maxY = y
+      }
+      const bx = (minX + maxX) / 2
+      const by = (minY + maxY) / 2
+      let anchor: [number, number] | null = null
+      if (inside(cx, cy, best.ring)) {
+        anchor = [cx, cy]
+      } else if (inside(bx, by, best.ring)) {
+        anchor = [bx, by]
+      } else {
+        // Grade grosseira: ponto interno mais próximo do centro do bbox.
+        let bestD = Infinity
+        const N = 24
+        for (let gi = 0; gi <= N; gi++) {
+          for (let gj = 0; gj <= N; gj++) {
+            const gx = minX + ((maxX - minX) * gi) / N
+            const gy = minY + ((maxY - minY) * gj) / N
+            if (!inside(gx, gy, best.ring)) continue
+            const d = (gx - bx) * (gx - bx) + (gy - by) * (gy - by)
+            if (d < bestD) {
+              bestD = d
+              anchor = [gx, gy]
+            }
+          }
+        }
+        anchor ??= [bx, by]
+      }
+      anchors[f.properties.sigla] = { x: anchor[0], y: anchor[1] }
     }
     return anchors
   }, [projection])
 
-  /* Vencedor por UF a partir do agregado live (top-1 de cada UF). */
   const ufLive = useMemo(() => {
     if (!snapshot) return null
     const firstSq = snapshot.nacional.top[0]?.sq
@@ -1545,7 +1689,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     }
   }, [snapshot])
 
-  /* Candidato focado (view 'candidato'): identidade + % nacional. */
   const focusCand = useMemo(() => {
     if (!snapshot) return null
     const sq = candidateSq ?? snapshot.nacional.top[0]?.sq
@@ -1563,7 +1706,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     }
   }, [snapshot, candidateSq])
 
-  /* % do candidato focado por UF (soma das cidades). */
   const ufCandShare = useMemo<Record<string, { vap: number; pct: number }>>(() => {
     if (!snapshot || !focusCand) return {}
     const vapByUf: Record<string, number> = {}
@@ -1584,7 +1726,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     return out
   }, [snapshot, focusCand])
 
-  /* Municípios vencidos por identidade (label da view municípios). */
   const cityWins = useMemo(() => {
     const wins: Record<Winner, number> = { flavio: 0, lula: 0, outro: 0 }
     if (!snapshot || !ufLive) return wins
@@ -1596,7 +1737,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     return wins
   }, [snapshot, ufLive])
 
-  /* Centroide (bbox do maior anel) de cada município — base das spikes. */
   const cityCenters = useMemo<Record<string, { x: number; y: number }>>(() => {
     if (municipalities.length === 0) return {}
     const { project } = projection
@@ -1628,7 +1768,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     return out
   }, [municipalities, projection])
 
-  /* Spikes da view Vantagem: altura ∝ √margem de votos. */
   const spikeData = useMemo(() => {
     if (!snapshot || !ufLive) {
       return { spikes: [], maxMargin: 1, flavioVotes: 0, lulaVotes: 0 }
@@ -1671,7 +1810,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     return { spikes, maxMargin, flavioVotes, lulaVotes }
   }, [snapshot, ufLive, cityCenters])
 
-  /* Apurados: municípios com 100% das seções. */
   const apuradoStats = useMemo(() => {
     if (!snapshot) return { done: 0, total: municipalities.length }
     let done = 0
@@ -1681,9 +1819,35 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     return { done, total: municipalities.length }
   }, [snapshot, municipalities.length])
 
-  /* Paths dos municípios: cor pelo vencedor real (top-1 de cada cidade). */
   const municipalityPaths = useMemo(() => {
-    if (municipalities.length === 0 || !snapshot || !ufLive) return []
+    if (municipalities.length === 0) return []
+    if (municipalChoropleth) {
+      return municipalities
+        .filter(
+          (f) =>
+            (nameIndex[f.properties.codarea]?.u ?? '') ===
+            municipalChoropleth.uf
+        )
+        .map((f) => {
+          const code = f.properties.codarea
+          const city = municipalChoropleth.cidades[code]
+          const d = geometryToPath(f.geometry)
+          const top = city?.top ?? []
+          if (top.length === 0 || !city) {
+            return { code, uf: municipalChoropleth.uf, d, fill: '#27272a' }
+          }
+          const sg =
+            municipalChoropleth.candidatos[top[0].sq]?.sg ?? ''
+          const margin = marginOf(top, city.vv)
+          return {
+            code,
+            uf: municipalChoropleth.uf,
+            d,
+            fill: partyShade(sg, margin)
+          }
+        })
+    }
+    if (!snapshot || !ufLive) return []
     return municipalities.map((f) => {
       const code = f.properties.codarea
       const city = snapshot.cidades[code]
@@ -1704,7 +1868,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
         winner = winnerOf(top1.sq, ufLive.firstSq, ufLive.secondSq)
         margin = marginOf(city.top, city.vv)
       } else {
-        // Cidade sem dado municipal: herda a cor da UF.
         const base = ufLive.ufs[uf] ?? { winner: 'outro' as Winner, margin: 0 }
         winner = base.winner
         margin = base.margin
@@ -1717,23 +1880,21 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [municipalities, nameIndex, projection, snapshot, ufLive, view, focusCand])
+  }, [municipalities, nameIndex, projection, snapshot, ufLive, view, focusCand, municipalChoropleth])
 
-  /** Lookup O(1) para o overlay da cidade em hover (sem varrer 5,7k paths). */
+  /** Overlay sem varrer 5,7k paths a cada hover. */
   const pathByCode = useMemo(() => {
     const idx: Record<string, MunicipalityPath> = {}
     for (const m of municipalityPaths) idx[m.code] = m
     return idx
   }, [municipalityPaths])
 
-  /** Feature por código (zoom ao clicar). Só referencia o array existente. */
   const munByCode = useMemo(() => {
     const idx: Record<string, MunFeature> = {}
     for (const f of municipalities) idx[f.properties.codarea] = f
     return idx
   }, [municipalities])
 
-  /** Bbox do município em coords do viewBox (base, sem transform). */
   const bboxOfCode = useCallback(
     (code: string) => {
       const f = munByCode[code]
@@ -1758,7 +1919,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     [munByCode, projection]
   )
 
-  /** Zoom animado para um ponto (coords viewBox) por um fator. */
   const zoomAt = useCallback(
     (point: [number, number], factor: number) => {
       stopAnim()
@@ -1770,17 +1930,16 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
       }
       const k = Math.min(Math.max(scale, MIN_SCALE), MAX_SCALE) / v.scale
       applyView(
-        clampView({
+        clampMode({
           scale: Math.min(Math.max(scale, MIN_SCALE), MAX_SCALE),
           tx: point[0] - (point[0] - v.tx) * k,
           ty: point[1] - (point[1] - v.ty) * k
         })
       )
     },
-    [applyView, stopAnim]
+    [applyView, stopAnim, clampMode]
   )
 
-  /** Enquadra um bbox: centro em MAP_CENTER com margem. */
   const fitView = useCallback(
     (bbox: { minX: number; maxX: number; minY: number; maxY: number }) => {
       const pad = 60
@@ -1802,7 +1961,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     [animateViewTo]
   )
 
-  /** Enquadra o município: centro em MAP_CENTER com margem. */
   const zoomToCode = useCallback(
     (code: string) => {
       const bbox = bboxOfCode(code)
@@ -1812,7 +1970,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     [fitView, bboxOfCode]
   )
 
-  /** Enquadra o estado: centro em MAP_CENTER com margem. */
   const zoomToState = useCallback(
     (sigla: string) => {
       const f = stateFeatures.find(
@@ -1846,16 +2003,13 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     [animateViewTo]
   )
 
-  /** Passo de zoom pelos botões, centrado na área do mapa. */
   const zoomStep = useCallback(
     (factor: number) => {
       stopAnim()
-      zoomAt(MAP_CENTER, factor)
+      zoomAt(mode === 'exterior' ? WORLD_CENTER : MAP_CENTER, factor)
     },
-    [stopAnim, zoomAt]
+    [stopAnim, zoomAt, mode]
   )
-
-  /* ------------------------- Modo exterior ------------------------- */
 
   const worldPaths = useMemo(
     () =>
@@ -1872,7 +2026,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     return idx
   }, [exteriorPlaces])
 
-  /** Bolhas das cidades do exterior: posição + raio por votos + cor por vencedor. */
   const exteriorDots = useMemo<ExteriorDot[]>(() => {
     if (!exterior || exteriorPlaces.length === 0) return []
     const withVotes = exteriorPlaces
@@ -1906,14 +2059,12 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     })
   }, [exterior, exteriorPlaces])
 
-  /** Rótulos das maiores cidades (como na imagem: Lisboa, Londres…). */
   const exteriorLabels = useMemo(
     () =>
       [...exteriorDots].sort((a, b) => b.votes - a.votes).slice(0, 6),
     [exteriorDots]
   )
 
-  /** Aproxima de uma cidade do exterior (ponto fixo, sem bbox). */
   const zoomToExteriorPoint = useCallback(
     (code: string) => {
       const p = placeByTse[code]
@@ -1922,8 +2073,8 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
       const scale = 4.5
       animateViewTo({
         scale,
-        tx: MAP_CENTER[0] - x * scale,
-        ty: MAP_CENTER[1] - y * scale
+        tx: WORLD_CENTER[0] - x * scale,
+        ty: WORLD_CENTER[1] - y * scale
       })
     },
     [animateViewTo, placeByTse]
@@ -1944,7 +2095,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     [mode, zoomToCode, zoomToExteriorPoint, zoomToState, isUfCode]
   )
 
-  // Seleção externa (ex.: CommandPalette): aproxima do município/cidade.
   useEffect(() => {
     if (selected === undefined || !selected) {
       if (selected === null) lastExternalZoom.current = null
@@ -1959,7 +2109,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     zoomToSelectedCode(selected)
   }, [selected, municipalities.length, exteriorPlaces.length, mode, zoomToSelectedCode])
 
-  // Seleção que chegou antes das geometrias: aplica ao carregar.
   useEffect(() => {
     const ready =
       mode === 'exterior'
@@ -1971,7 +2120,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     zoomToSelectedCode(code)
   }, [municipalities.length, exteriorPlaces.length, mode, zoomToSelectedCode])
 
-  // Seleção removida (ex.: ESC global): volta o zoom ao Brasil/mundo inteiro.
   const hadSelection = useRef(false)
   useEffect(() => {
     if (selected) {
@@ -1984,6 +2132,30 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     }
   }, [selected, resetView])
 
+  // ESC com estado/município selecionado: desseleciona (vale p/ todas as abas).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.isComposing) return
+      const t = e.target as Element | null
+      if (
+        t &&
+        (t.tagName === 'INPUT' ||
+          t.tagName === 'TEXTAREA' ||
+          t.tagName === 'SELECT')
+      ) {
+        return
+      }
+      if (!resolvedSelected) return
+      setHover(null)
+      setInternalSelected(null)
+      onSelect?.(null)
+      lastExternalZoom.current = null
+      resetView()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onSelect, resetView, resolvedSelected])
+
   const statePaths = useMemo(
     () =>
       stateFeatures.map((f) => ({
@@ -1995,13 +2167,50 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     [projection]
   )
 
+  /** Bbox de cada UF em coords do viewBox (base do split diagonal). */
+  const stateBoxes = useMemo(() => {
+    const { project } = projection
+    const boxes: Record<
+      string,
+      { minX: number; maxX: number; minY: number; maxY: number }
+    > = {}
+    for (const f of stateFeatures) {
+      const sigla = f.properties.sigla
+      let minX = Infinity
+      let maxX = -Infinity
+      let minY = Infinity
+      let maxY = -Infinity
+      eachRing(f.geometry, (ring) => {
+        for (const [lon, lat] of ring) {
+          const [x, y] = project(lon, lat)
+          if (x < minX) minX = x
+          if (x > maxX) maxX = x
+          if (y < minY) minY = y
+          if (y > maxY) maxY = y
+        }
+      })
+      if (Number.isFinite(minX)) boxes[sigla] = { minX, maxX, minY, maxY }
+    }
+    return boxes
+  }, [stateFeatures, projection])
+
   const hoverCity: CityResult | null = useMemo(() => {
     if (!hover) return null
+    const govCovered =
+      !!municipalChoropleth?.cidades[hover.code]
+    if (suppressPopover && !govCovered) return null
     if (mode === 'exterior') {
       if (!exterior) return null
       const place = placeByTse[hover.code]
       if (!place) return null
-      return getExteriorCityResult(exterior, place)
+      return getExteriorCityResult(exterior, place, past)
+    }
+    if (municipalChoropleth && municipalChoropleth.cidades[hover.code]) {
+      return getGovCityResult(
+        municipalChoropleth,
+        hover.code,
+        nameIndex[hover.code]?.n ?? `Município ${hover.code}`
+      )
     }
     if (!snapshot) return null
     if (hover.code.startsWith('UF:')) {
@@ -2020,10 +2229,10 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
       info?.n ?? `Município ${hover.code}`,
       info?.u ?? hover.uf
     )
-  }, [hover, mode, exterior, placeByTse, nameIndex, snapshot, past])
+  }, [hover, mode, exterior, placeByTse, nameIndex, snapshot, past, suppressPopover, municipalChoropleth])
 
-  /** Popover das badges (estado ou globo): mesmo card do mapa. */
   const badgeCity: CityResult | null = useMemo(() => {
+    if (suppressPopover) return null
     if (!badgeHover) return null
     if (badgeHover.kind === 'state') {
       if (!snapshot) return null
@@ -2037,9 +2246,8 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     const snap = exterior ?? globeData
     if (!snap) return null
     return getExteriorAggregateResult(snap, past)
-  }, [badgeHover, snapshot, past, stateFeatures, exterior, globeData])
+  }, [badgeHover, snapshot, past, stateFeatures, exterior, globeData, suppressPopover])
 
-  /** Âncora do popover a partir de um ponto do viewBox (badge lateral). */
   const anchorBadgeAt = useCallback((vx: number, vy: number) => {
     const svg = svgRef.current
     const wrap = wrapRef.current
@@ -2078,13 +2286,13 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
       show(snap)
       return
     }
-    void loadExteriorAgg().then((s) => {
+    void loadExteriorAgg(turno).then((s) => {
       if (s) {
         setGlobeData(s)
         show(s)
       }
     })
-  }, [anchorBadgeAt, exterior, globeData])
+  }, [anchorBadgeAt, exterior, globeData, turno])
 
   const clearBadgeHover = useCallback(() => {
     setBadgeHover(null)
@@ -2102,7 +2310,7 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     [onSelect, zoomToState]
   )
 
-  /** Overlay único da cidade em hover (substitui os 5,7k `<title>`). */
+  /** Um overlay só (5,7k `<title>` travariam o hover). */
   const hoveredPath =
     mode === 'brasil' && hover ? pathByCode[hover.code] : undefined
   const hoveredName =
@@ -2125,10 +2333,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     return resolvedSelected
   }, [resolvedSelected, nameIndex, mode, placeByTse, stateFeatures])
 
-  /**
-   * UF em foco: a UF selecionada, ou a UF da cidade selecionada.
-   * Quando ativa, só as cidades dela aparecem e os vizinhos esmaecem.
-   */
   const focusedUf = useMemo(() => {
     if (mode !== 'brasil' || !resolvedSelected) return null
     if (stateFeatures.some((f) => f.properties.sigla === resolvedSelected)) {
@@ -2139,8 +2343,31 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     return nameIndex[resolvedSelected]?.u ?? null
   }, [mode, resolvedSelected, snapshot, nameIndex, stateFeatures])
 
-  /** Maiores cidades da UF em foco (rótulos como na referência). */
-  const focusCityLabels = useMemo(() => {
+  /** UF sob hover (mapa ou badge lateral) — borda branca só aqui. */
+  const hoveredUf = useMemo(() => {
+    if (badgeHover?.kind === 'state') return badgeHover.sigla
+    if (hover?.code.startsWith('UF:')) return hover.code.slice(3)
+    return hover?.uf ?? null
+  }, [badgeHover, hover])
+
+  /** Conteúdo do popover custom por UF (quando fornecido). */
+  const statePopoverNode =
+    statePopover && hoveredUf ? statePopover(hoveredUf) : null
+
+  /** UF com destaque de borda (selecionada/foco = forte, só hover = médio). */
+  const highlightUf = useMemo(() => {    if (mode !== 'brasil') return null
+    if (
+      resolvedSelected &&
+      stateFeatures.some((f) => f.properties.sigla === resolvedSelected)
+    ) {
+      return { sigla: resolvedSelected, strong: true }
+    }
+    if (focusedUf) return { sigla: focusedUf, strong: true }
+    if (hoveredUf) return { sigla: hoveredUf, strong: false }
+    return null
+  }, [mode, resolvedSelected, stateFeatures, focusedUf, hoveredUf])
+
+    const focusCityLabels = useMemo(() => {
     if (mode !== 'brasil' || !focusedUf || !snapshot) return []
     return Object.entries(snapshot.cidades)
       .filter(([, c]) => c.uf === focusedUf)
@@ -2161,12 +2388,7 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     closeTimer.current = window.setTimeout(() => setHover(null), 120)
   }, [])
 
-  /**
-   * Hover com throttle via rAF: no máximo 1 setState por frame, e com
-   * bail-out (retorna `prev`) quando nem a cidade nem a posição mudaram de
-   * forma relevante — nesse caso o React nem re-renderiza.
-   */
-  /** Enfileira o hover via rAF com bail-out (posição/código iguais = sem render). */
+  /** Hover via rAF com bail-out (sem mudança = sem render). */
   const queueHover = useCallback(
     (
       wrap: HTMLDivElement,
@@ -2199,7 +2421,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
 
   const handleSvgMove = useCallback(
     (e: React.MouseEvent<SVGSVGElement>) => {
-      // Durante arrasto/pinch o hover é suprimido (sem popover arrastando).
       if (dragging.current) return
       const el = e.target as Element | null
       const target = el?.closest?.('[data-city]') as Element | null
@@ -2216,7 +2437,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
         queueHover(wrap, e, code, uf)
         return
       }
-      // Sem cidade: tenta o estado (view Estados / bordas).
       const stateEl = el?.closest?.('[data-state]') as Element | null
       if (stateEl && mode === 'brasil') {
         if (closeTimer.current) window.clearTimeout(closeTimer.current)
@@ -2235,7 +2455,7 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
 
   const handleSvgClick = useCallback(
     (e: React.MouseEvent<SVGSVGElement>) => {
-      // Clique após arrasto = pan, não seleção.
+      // Após arrasto = pan.
       if (suppressClick.current) {
         suppressClick.current = false
         return
@@ -2250,7 +2470,7 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
         ? (target.getAttribute('data-city') ?? '')
         : (stateEl?.getAttribute('data-state') ?? '')
       if (!target && !stateEl) {
-        // Fundo vazio: só limpa seleção/hover, sem mexer no zoom.
+        // Fundo vazio não mexe no zoom.
         setHover(null)
         setInternalSelected(null)
         onSelect?.(null)
@@ -2259,7 +2479,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
       }
       if (!code) return
       if (resolvedSelected === code) {
-        // Toggle: segundo clique volta ao Brasil inteiro.
         setInternalSelected(null)
         onSelect?.(null)
         lastExternalZoom.current = null
@@ -2282,8 +2501,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
       mode
     ]
   )
-
-  /* ---------------- Gestos: pan (arrasto), pinch e wheel ---------------- */
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent<SVGSVGElement>) => {
@@ -2323,7 +2540,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
       const ids = Object.keys(pts)
       const meet = Math.min(rect.width / VIEW_W, rect.height / VIEW_H)
 
-      // Pinch: zoom no ponto médio + pan pelo deslocamento do meio.
       if (ids.length === 2 && pinch.current) {
         const a = pts[Number(ids[0])]
         const b = pts[Number(ids[1])]
@@ -2334,7 +2550,7 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
         if (last.dist > 0 && dist > 0) {
           const v = viewRef.current
           applyView(
-            clampView({
+            clampMode({
               scale: v.scale,
               tx: v.tx + (midX - last.midX) / meet,
               ty: v.ty + (midY - last.midY) / meet
@@ -2346,7 +2562,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
         return
       }
 
-      // Arrasto com 1 ponteiro: pan após limiar de 6px.
       if (ids.length === 1 && downPos.current) {
         const moved = Math.hypot(
           e.clientX - downPos.current.x,
@@ -2360,7 +2575,7 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
         }
         const v = viewRef.current
         applyView(
-          clampView({
+          clampMode({
             scale: v.scale,
             tx: v.tx + (e.clientX - prev.x) / meet,
             ty: v.ty + (e.clientY - prev.y) / meet
@@ -2392,7 +2607,7 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     }
   }, [endPointer, handleWindowMove])
 
-  // Wheel nativo não-passivo: zoom centrado no cursor sem rolar a página.
+  // Nativo não-passivo p/ preventDefault (zoom sem rolar a página).
   useEffect(() => {
     const svg = svgRef.current
     if (!svg) return
@@ -2412,7 +2627,7 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     (e: React.MouseEvent<SVGSVGElement>) => {
       const svg = svgRef.current
       if (!svg) return
-      // Zoom só sobre cidade/estado — nunca no fundo vazio.
+      // Nunca no fundo vazio.
       const el = e.target as Element | null
       const hit =
         el?.closest?.('[data-city]') ??
@@ -2439,8 +2654,8 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     y: number
   }
 
-  /** Badges laterais por view (texto + cores). */
   const badges = useMemo<SideBadge[]>(() => {
+    if (choropleth) return []
     if (mode !== 'brasil' || mapView === 'vantagem') return []
     return (SIDE_UFS as readonly string[]).flatMap((sigla, i) => {
       const y = badgeY(i)
@@ -2476,10 +2691,19 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
         y
       }]
     })
-  }, [mode, mapView, snapshot, focusCand, ufCandShare, ufLive])
+  }, [mode, mapView, snapshot, focusCand, ufCandShare, ufLive, choropleth])
 
-  /** Badge Brasil (globo) por view. */
+  /** UFs pequenas com foto de eleito: foto vai p/ badge lateral. */
+  const photoBadgeSiglas = useMemo(
+    () =>
+      (SIDE_UFS as readonly string[]).filter(
+        (s) => (choropleth?.photos?.[s]?.length ?? 0) > 0
+      ),
+    [choropleth]
+  )
+
   const globeBadge = useMemo(() => {
+    if (choropleth) return null
     if (mode !== 'brasil' || mapView === 'vantagem') return null
     if (mapView === 'apurado') {
       const pst = snapshot?.nacional.pst
@@ -2496,7 +2720,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
       }
     }
     if (ufLive?.nacionalPct == null) return null
-    // Cor do vencedor no exterior (vermelho PT / azul PL por margem).
     const extTotal = (exterior ?? globeData)?.total
     const extTop = extTotal?.top ?? []
     const extWinner =
@@ -2510,16 +2733,9 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
       fill: extFill,
       textFill: '#fff'
     }
-  }, [mode, mapView, snapshot, focusCand, ufLive, exterior, globeData])
+  }, [mode, mapView, snapshot, focusCand, ufLive, exterior, globeData, choropleth])
 
-  /**
-   * Label do topo direito por modo (estrita às referências):
-   * - municipios: `PL n | PT n municípios` + rampa + escala de margem.
-   * - estados: `PL n | PT n estados` + rampa + escala de margem.
-   * - vantagem: `PL +x,x mi | PT +y,y mi` + legenda de tamanhos.
-   * - apurado: `n de total municípios apurados` + rampa cinza.
-   * - candidato: `À frente em n municípios` ou `Mais forte em UF · pct`.
-   */
+  /** Label do topo direito varia por modo/view (ver referências). */
   const topLabel = useMemo(() => {
     if (mode === 'exterior') {
       if (exteriorDots.length === 0) return null
@@ -2566,8 +2782,8 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     if (mapView === 'vantagem') {
       return {
         entries: [
-          { sg: 'PL', count: formatMi(spikeData.flavioVotes), accent: '#5b8def' },
-          { sg: 'PT', count: formatMi(spikeData.lulaVotes), accent: '#f87171' }
+          { sg: 'PL', count: formatMi(spikeData.flavioVotes), accent: PARTIES.PL.cor },
+          { sg: 'PT', count: formatMi(spikeData.lulaVotes), accent: PARTIES.PT.cor }
         ],
         unit: '',
         ramp: BLUE_RAMP,
@@ -2618,7 +2834,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
         spikes: false
       }
     }
-    // municipios (padrão): municípios vencidos por partido.
     const ranked = (Object.entries(cityWins) as [Winner, number][])
       .filter(([, n]) => n > 0)
       .sort((a, b) => b[1] - a[1])
@@ -2638,6 +2853,69 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
   }, [mode, ufLive, exteriorDots, snapshot, view, focusCand, ufCandShare, cityWins, spikeData, apuradoStats, stateFeatures])
 
   return (
+    <>
+    {(filters || choropleth?.legend || topLabel) && (
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        {filters}
+        {choropleth?.legend ?? (topLabel && (
+          <div className="border-woodsmoke-700 bg-woodsmoke-900/90 rounded-lg border px-2.5 py-1.5 shadow-xl backdrop-blur">
+            <p className="flex items-center gap-1.5 text-[11px] font-bold whitespace-nowrap text-white tabular-nums">
+              {topLabel.entries.map((e) => (
+                <span key={e.sg} className="inline-flex items-center gap-1">
+                  <i
+                    className="inline-block h-2 w-2 rounded-[2px]"
+                    style={{ backgroundColor: e.accent }}
+                  />
+                  {e.sg} {e.count}
+                </span>
+              ))}
+              <span className="text-woodsmoke-400 font-semibold">
+                {topLabel.unit}
+              </span>
+              {topLabel.spikes ? (
+                <span
+                  className="text-woodsmoke-500 inline-flex items-end gap-1 font-semibold"
+                  aria-hidden="true"
+                >
+                  <i
+                    className="inline-block h-1.5 w-1.5 bg-woodsmoke-500"
+                    style={{ clipPath: 'polygon(50% 0, 100% 100%, 0 100%)' }}
+                  />
+                  <span>10 mil</span>
+                  <i
+                    className="inline-block h-2.5 w-2.5 bg-woodsmoke-500"
+                    style={{ clipPath: 'polygon(50% 0, 100% 100%, 0 100%)' }}
+                  />
+                  <span>100 mil</span>
+                  <i
+                    className="inline-block h-4 w-4 bg-woodsmoke-500"
+                    style={{ clipPath: 'polygon(50% 0, 100% 100%, 0 100%)' }}
+                  />
+                  <span>500 mil</span>
+                </span>
+              ) : (
+                <>
+                  <span className="flex items-center gap-0.5" aria-hidden="true">
+                    {topLabel.ramp.map((color) => (
+                      <i
+                        key={color}
+                        className="inline-block h-2 w-4 rounded-[2px]"
+                        style={{ backgroundColor: color }}
+                      />
+                    ))}
+                  </span>
+                  {topLabel.scaleText && (
+                    <span className="text-woodsmoke-500 font-semibold">
+                      {topLabel.scaleText}
+                    </span>
+                  )}
+                </>
+              )}
+            </p>
+          </div>
+        ))}
+      </div>
+    )}
     <div
       ref={wrapRef}
       className={cn(
@@ -2647,42 +2925,12 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
     >
       <style>{MAP_LAYER_CSS}</style>
 
-      {/* Toggle de abrangência (fiel à imagem: Brasil › Exterior). */}
-      {onModeChange && (
-        <div
-          role="tablist"
-          aria-label="Abrangência da apuração"
-          className="border-woodsmoke-700 bg-woodsmoke-900/90 absolute top-3 left-3 z-20 flex items-center gap-1 rounded-full border px-1 py-1 shadow-xl backdrop-blur"
-        >
-          {(
-            [
-              { value: 'brasil', label: 'Brasil' },
-              { value: 'exterior', label: 'Exterior' }
-            ] as const
-          ).map((t, i) => (
-            <span key={t.value} className="flex items-center gap-1">
-              {i > 0 && <span aria-hidden="true" className="text-woodsmoke-500 text-xs">›</span>}
-              <button
-                type="button"
-                role="tab"
-                aria-selected={mode === t.value}
-                onClick={() => onModeChange(t.value)}
-                className={cn(
-                  'rounded-full px-2.5 py-1 text-xs font-semibold transition-colors',
-                  mode === t.value
-                    ? 'text-woodsmoke-50'
-                    : 'text-woodsmoke-400 hover:text-woodsmoke-200'
-                )}
-              >
-                {t.label}
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-
       <Popover.Root
-        open={hover !== null || badgeHover !== null}
+        open={
+          statePopover
+            ? statePopoverNode !== null
+            : (hover !== null || badgeHover !== null) && !suppressPopover
+        }
         onOpenChange={(open) => {
           if (!open) {
             setHover(null)
@@ -2700,7 +2948,7 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
               ? 'Mapa do mundo com o voto brasileiro no exterior. Arraste para navegar, use a roda para zoom, clique numa cidade para aproximar.'
               : 'Mapa do Brasil por município. Arraste para navegar, use a roda para zoom, clique num município para aproximar.'
           }
-          className="block h-[clamp(430px,66vh,720px)] w-full touch-none cursor-default select-none active:cursor-grabbing"
+          className="block h-[clamp(400px,60vh,680px)] w-full touch-none cursor-default select-none active:cursor-grabbing xl:h-full"
           onMouseMove={handleSvgMove}
           onMouseLeave={scheduleClose}
           onClick={handleSvgClick}
@@ -2713,13 +2961,11 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
             }
           }}
         >
-          {/* Camadas do mapa: transform único na GPU (sem re-render pesado). */}
           <g
             transform={`translate(${view.tx} ${view.ty}) scale(${view.scale})`}
           >
           {mode === 'exterior' && (
             <>
-              {/* Fundo do mundo (países em cinza escuro, como na referência). */}
               {worldPaths.map((w) => (
                 <path
                   key={w.key}
@@ -2732,13 +2978,11 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
                   vectorEffect="non-scaling-stroke"
                 />
               ))}
-              {/* Bolhas das cidades: raio por votos, cor por vencedor/margem. */}
               <ExteriorDotsLayer
                 dots={exteriorDots}
                 hoverCode={hover?.code ?? null}
                 selectedCode={resolvedSelected}
               />
-              {/* Rótulos das maiores cidades (Lisboa, Londres…). */}
               {exteriorLabels.map((d) => {
                 const fs = 1 / view.scale
                 return (
@@ -2764,10 +3008,13 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
           )}
           {mode === 'brasil' && (
             <>
-          {/* Base dos estados (fallback enquanto municípios carregam). */}
           {statePaths.map((s) => {
             const r = ufLive?.ufs[s.sigla]
             const dimmed = focusedUf && s.sigla !== focusedUf
+            const softState = !!choropleth?.soft?.includes(s.sigla)
+            const baseFill = choropleth
+              ? (choropleth.fills[s.sigla] ?? '#27272a')
+              : '#27272a'
             return (
               <path
                 key={`base-${s.sigla}`}
@@ -2775,11 +3022,15 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
                 data-uf={s.sigla}
                 data-state={s.sigla}
                 fill={
-                  mapView === 'vantagem'
-                    ? '#141416'
-                    : r
-                      ? fillFor(r.winner, r.margin)
-                      : '#27272a'
+                  choropleth
+                    ? softState
+                      ? tintWithWhite(baseFill, 0.45)
+                      : baseFill
+                    : mapView === 'vantagem'
+                      ? '#141416'
+                      : r
+                        ? fillFor(r.winner, r.margin)
+                        : '#27272a'
                 }
                 fillOpacity={dimmed ? 0.25 : 1}
                 stroke="rgba(0,0,0,0.55)"
@@ -2791,8 +3042,68 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
             )
           })}
 
-          {/* Malha municipal (oculta nas views Estados e Vantagem,
-              salvo com UF em foco: mostra só as cidades dela). */}
+          {choropleth?.split &&
+            Object.entries(choropleth.split).map(([sigla, pair]) => {
+              const s = statePaths.find((x) => x.sigla === sigla)
+              const box = stateBoxes[sigla]
+              if (!s || !box) return null
+              return (
+                <g key={`split-${sigla}`} pointerEvents="none">
+                  <clipPath id={`splitclip-${sigla}`}>
+                    <polygon
+                      points={`${box.minX},${box.maxY} ${box.maxX},${box.maxY} ${box.maxX},${box.minY}`}
+                    />
+                  </clipPath>
+                  <path
+                    d={s.d}
+                    fill={pair[1]}
+                    clipPath={`url(#splitclip-${sigla})`}
+                  />
+                </g>
+              )
+            })}
+
+          {choropleth?.photos &&
+            Object.entries(choropleth.photos).map(([sigla, urls]) => {
+              const a = stateAnchors[sigla]
+              if (!a || urls.length === 0) return null
+              if (photoBadgeSiglas.includes(sigla)) return null
+              const shown = urls.slice(0, 2)
+              return (
+                <g key={`senph-${sigla}`} pointerEvents="none">
+                  {shown.map((url, i) => {
+                    const cx =
+                      shown.length === 1 ? a.x : a.x + (i === 0 ? -13 : 13)
+                    const cy = a.y - 10
+                    return (
+                      <g key={i}>
+                        <clipPath id={`senclip-${sigla}-${i}`}>
+                          <circle cx={cx} cy={cy} r={18} />
+                        </clipPath>
+                        <image
+                          href={url}
+                          x={cx - 18}
+                          y={cy - 18}
+                          width={36}
+                          height={36}
+                          preserveAspectRatio="xMidYMid slice"
+                          clipPath={`url(#senclip-${sigla}-${i})`}
+                        />
+                        <circle
+                          cx={cx}
+                          cy={cy}
+                          r={18}
+                          fill="none"
+                          stroke="#fff"
+                          strokeWidth={3}
+                        />
+                      </g>
+                    )
+                  })}
+                </g>
+              )
+            })}
+
           {(mapView === 'municipios' ||
             mapView === 'apurado' ||
             mapView === 'candidato' ||
@@ -2801,10 +3112,10 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
               paths={municipalityPaths}
               selectedCode={resolvedSelected}
               focusUf={focusedUf}
+              scale={view.scale}
             />
           )}
 
-          {/* Rótulos das maiores cidades da UF em foco. */}
           {focusedUf &&
             focusCityLabels.map((c) => {
               const fs = 1 / view.scale
@@ -2834,7 +3145,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
               )
             })}
 
-          {/* Spikes da view Vantagem. */}
           {mapView === 'vantagem' && (
             <SpikesLayer
               spikes={spikeData.spikes}
@@ -2842,45 +3152,98 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
             />
           )}
 
-          {/* Contorno das UFs sobre os municípios. */}
           {statePaths.map((s) => (
             <path
               key={`border-${s.sigla}`}
               d={s.d}
               fill="none"
               stroke={
-                resolvedSelected === s.sigla
-                  ? '#fff'
-                  : mapView === 'vantagem'
-                    ? 'rgba(255,255,255,0.14)'
-                    : 'rgba(0,0,0,0.6)'
+                mapView === 'vantagem'
+                  ? 'rgba(255,255,255,0.14)'
+                  : 'rgba(0,0,0,0.6)'
               }
-              strokeWidth={resolvedSelected === s.sigla ? 1.6 : 0.9}
+              strokeWidth={0.9}
               strokeLinejoin="round"
               pointerEvents="none"
               vectorEffect="non-scaling-stroke"
             />
           ))}
+          {(() => {
+            const s =
+              highlightUf &&
+              statePaths.find((x) => x.sigla === highlightUf.sigla)
+            if (!s || !highlightUf) return null
+            return (
+              <g key={`hl-${s.sigla}`} pointerEvents="none">
+                <clipPath id={`hlclip-${s.sigla}`}>
+                  <path d={s.d} />
+                </clipPath>
+                <path
+                  d={s.d}
+                  fill="none"
+                  stroke="#FFFFFF"
+                  strokeWidth={highlightUf.strong ? 4 : 3}
+                  strokeLinejoin="round"
+                  clipPath={`url(#hlclip-${s.sigla})`}
+                  vectorEffect="non-scaling-stroke"
+                />
+              </g>
+            )
+          })()}
           </>)}
 
-          {/* Overlay único da cidade em hover: destaque + tooltip acessível.
-              `pointerEvents="none"` mantém o hit-test no path original. */}
-          {hoveredPath && (
-            <path
-              d={hoveredPath.d}
-              fill={hoveredPath.fill}
-              fillOpacity={0.92}
-              stroke="#fff"
-              strokeWidth={1.4}
-              strokeLinejoin="round"
-              pointerEvents="none"
-              vectorEffect="non-scaling-stroke"
-            >
-              <title>{hoveredName}</title>
-            </path>
-          )}
+          {(() => {
+            if (!hoveredPath) return null
+            const box = pathBBox(hoveredPath.d)
+            const tiny =
+              box != null &&
+              Math.min(box.maxX - box.minX, box.maxY - box.minY) *
+                view.scale <
+                HIGHLIGHT_DOT_PX
+            if (tiny && box) {
+              return (
+                <g key={`hldot-${hoveredPath.code}`} pointerEvents="none">
+                  <path
+                    d={hoveredPath.d}
+                    fill={hoveredPath.fill}
+                    fillOpacity={0.92}
+                  >
+                    <title>{hoveredName}</title>
+                  </path>
+                  <circle
+                    cx={(box.minX + box.maxX) / 2}
+                    cy={(box.minY + box.maxY) / 2}
+                    r={3 / view.scale}
+                    fill="#fff"
+                  />
+                </g>
+              )
+            }
+            return (
+              <g key={`hl-${hoveredPath.code}`} pointerEvents="none">
+                <clipPath id={`hlclip-city-${hoveredPath.code}`}>
+                  <path d={hoveredPath.d} />
+                </clipPath>
+                <path
+                  d={hoveredPath.d}
+                  fill={hoveredPath.fill}
+                  fillOpacity={0.92}
+                />
+                <path
+                  d={hoveredPath.d}
+                  fill="none"
+                  stroke="#fff"
+                  strokeWidth={2}
+                  strokeLinejoin="round"
+                  clipPath={`url(#hlclip-city-${hoveredPath.code})`}
+                  vectorEffect="non-scaling-stroke"
+                >
+                  <title>{hoveredName}</title>
+                </path>
+              </g>
+            )
+          })()}
 
-          {/* Chamadas laterais: fixas na tela; somem com zoom (visão geral). */}
           {mode === 'brasil' && mapView !== 'vantagem' && (
           <g
             style={{
@@ -2888,12 +3251,11 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
               transition: 'opacity .3s'
             }}
           >
-          {/* Linhas de chamada para as badges laterais. */}
           {(SIDE_UFS as readonly string[]).map((sigla, i) => {
             const anchor = stateAnchors[sigla]
             if (!anchor) return null
+            if (choropleth && !photoBadgeSiglas.includes(sigla)) return null
             const y = badgeY(i)
-            // UF sob hover (mapa ou badge): linha branca p/ contraste.
             const activeUf =
               badgeHover?.kind === 'state'
                 ? badgeHover.sigla
@@ -2924,13 +3286,11 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
             )
           })}
 
-          {/* Rótulos internos das UFs: conteúdo muda por view. */}
           {view.scale <= 2.2 &&
             inlineUfs.map((sigla) => {
               const anchor = stateAnchors[sigla]
               if (!anchor) return null
               const fs = 1 / view.scale
-              // Apurado: texto escuro sobre o mapa claro.
               if (mapView === 'apurado') {
                 const pst = snapshot?.ufs[sigla]?.pst
                 if (pst == null) return null
@@ -2969,15 +3329,14 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
                   </g>
                 )
               }
-              // Candidato: % dele na UF + ponto na cor do partido.
               if (mapView === 'candidato' && focusCand) {
                 const s = ufCandShare[sigla]
                 if (!s) return null
                 const dot =
                   focusCand.sg === 'PL'
-                    ? '#5b8def'
+                    ? PARTIES.PL.cor
                     : focusCand.sg === 'PT'
-                      ? '#f87171'
+                      ? PARTIES.PT.cor
                       : '#eab308'
                 return (
                   <g
@@ -3016,13 +3375,44 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
                 )
               }
               const r = ufLive?.ufs[sigla]
+              if (choropleth && !r) {
+                const sub = choropleth.labels?.[sigla]
+                const hasPhotos =
+                  (choropleth.photos?.[sigla]?.length ?? 0) > 0
+                return (
+                  <g key={`label-${sigla}`} pointerEvents="none">
+                    <text
+                      x={anchor.x}
+                      y={hasPhotos ? anchor.y + 26 * fs : anchor.y - 4 * fs}
+                      textAnchor="middle"
+                      fill="#fff"
+                      fontSize={13 * fs}
+                      fontWeight={800}
+                    >
+                      {sigla}
+                    </text>
+                    {sub && (
+                      <text
+                        x={anchor.x}
+                        y={hasPhotos ? anchor.y + 41 * fs : anchor.y + 11 * fs}
+                        textAnchor="middle"
+                        fill="#fff"
+                        fontSize={11 * fs}
+                        fontWeight={700}
+                      >
+                        {sub}
+                      </text>
+                    )}
+                  </g>
+                )
+              }
               if (!r) return null
               const dot =
                 r.winner === 'flavio'
-                  ? '#93c5fd'
+                  ? WINNER_COLORS_LIGHT.flavio
                   : r.winner === 'lula'
-                    ? '#fca5a5'
-                    : '#9ca3af'
+                    ? WINNER_COLORS_LIGHT.lula
+                    : WINNER_COLORS_LIGHT.outro
               return (
                 <g
                   key={`label-${sigla}`}
@@ -3062,7 +3452,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
           </g>
           )}
 
-          {/* Badges laterais (fiel à imagem). */}
           {mode === 'brasil' &&
           badges.map((b) => {
             const hot =
@@ -3120,7 +3509,83 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
             )
           })}
 
-          {/* Badge Brasil (globo): conteúdo por view. */}
+          {choropleth &&
+          photoBadgeSiglas.map((sigla) => {
+            const idx = (SIDE_UFS as readonly string[]).indexOf(sigla)
+            const y = badgeY(idx)
+            const urls = (choropleth.photos?.[sigla] ?? []).slice(0, 2)
+            const hot =
+              badgeHover?.kind === 'state' && badgeHover.sigla === sigla
+            return (
+            <g
+              key={`senbadge-${sigla}`}
+              role="button"
+              tabIndex={0}
+              aria-label={`Ver ${sigla}`}
+              style={{ cursor: 'pointer', outline: 'none' }}
+              onMouseEnter={() => handleBadgeEnter(sigla, y + 13)}
+              onMouseLeave={clearBadgeHover}
+              onFocus={() => handleBadgeEnter(sigla, y + 13)}
+              onBlur={clearBadgeHover}
+              onClick={() => handleBadgeActivate(sigla)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  handleBadgeActivate(sigla)
+                }
+              }}
+            >
+              <rect
+                x={800}
+                y={y}
+                width={92}
+                height={26}
+                rx={4}
+                fill={choropleth.fills[sigla] ?? '#27272a'}
+                stroke={hot ? '#fff' : '#00000073'}
+                strokeWidth={hot ? 1.6 : 1}
+              />
+              {urls.map((url, i) => {
+                const cx = urls.length === 1 ? 822 : 813 + i * 16
+                return (
+                  <g key={i}>
+                    <clipPath id={`senbclip-${sigla}-${i}`}>
+                      <circle cx={cx} cy={y + 13} r={8.5} />
+                    </clipPath>
+                    <image
+                      href={url}
+                      x={cx - 8.5}
+                      y={y + 4.5}
+                      width={17}
+                      height={17}
+                      preserveAspectRatio="xMidYMid slice"
+                      clipPath={`url(#senbclip-${sigla}-${i})`}
+                    />
+                    <circle
+                      cx={cx}
+                      cy={y + 13}
+                      r={8.5}
+                      fill="none"
+                      stroke="#fff"
+                      strokeWidth={1.5}
+                    />
+                  </g>
+                )
+              })}
+              <text
+                x={884}
+                y={y + 17}
+                fill="#fff"
+                fontSize={12}
+                fontWeight={800}
+                textAnchor="end"
+              >
+                {sigla}
+              </text>
+            </g>
+            )
+          })}
+
           {mode === 'brasil' && globeBadge && (
           <g
             role="button"
@@ -3167,7 +3632,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
           </g>
         </svg>
 
-        {/* Popover de cidade/estado no hover — composition reutilizável. */}
         <Popover.Content
           x={hover?.x ?? badgeHover?.x}
           y={hover?.y ?? badgeHover?.y}
@@ -3177,13 +3641,20 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
           clampHeight={size.h || undefined}
           className="pointer-events-none"
         >
-          {(hoverCity ?? badgeCity) && (
-            <CityPopoverCard city={(hoverCity ?? badgeCity)!} />
+          {statePopover ? (
+            hover && !hover.code.startsWith('UF:') && hoverCity ? (
+              <CityPopoverCard city={hoverCity} />
+            ) : (
+              statePopoverNode
+            )
+          ) : (
+            (hoverCity ?? badgeCity) && (
+              <CityPopoverCard city={(hoverCity ?? badgeCity)!} />
+            )
           )}
         </Popover.Content>
       </Popover.Root>
 
-      {/* Estado de carregamento / seleção. */}
       {loadingMun && (
         <p className="text-woodsmoke-400 pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 whitespace-nowrap text-xs">
           Carregando mapa (IBGE)…
@@ -3193,12 +3664,12 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
         <p className="text-woodsmoke-400 pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 whitespace-nowrap text-xs">
           {resultsError
             ? 'TSE indisponível no momento — tentando de novo…'
-            : 'Carregando resultados TSE 2026 · 1º turno…'}
+            : `Carregando resultados TSE 2026 · ${turnoLabel(turno)}…`}
         </p>
       )}
       {!loadingMun && mode === 'exterior' && !exterior && (
         <p className="text-woodsmoke-400 pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 whitespace-nowrap text-xs">
-          Carregando voto no exterior (TSE 2026 · 1º turno)…
+          Carregando voto no exterior (TSE 2026 · {turnoLabel(turno)})…
         </p>
       )}
       {!loadingMun && selectedCityName && (
@@ -3207,66 +3678,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
         </p>
       )}
 
-      {/* Label do topo direito (estrita à referência). */}
-      {topLabel && (
-        <div className="border-woodsmoke-700 bg-woodsmoke-900/90 pointer-events-none absolute top-3 right-3 z-20 rounded-lg border px-2.5 py-1.5 shadow-xl backdrop-blur">
-          <p className="flex items-center gap-1.5 text-[11px] font-bold whitespace-nowrap text-white tabular-nums">
-            {topLabel.entries.map((e) => (
-              <span key={e.sg} className="inline-flex items-center gap-1">
-                <i
-                  className="inline-block h-2 w-2 rounded-[2px]"
-                  style={{ backgroundColor: e.accent }}
-                />
-                {e.sg} {e.count}
-              </span>
-            ))}
-            <span className="text-woodsmoke-400 font-semibold">
-              {topLabel.unit}
-            </span>
-            {topLabel.spikes ? (
-              <span
-                className="text-woodsmoke-500 inline-flex items-end gap-1 font-semibold"
-                aria-hidden="true"
-              >
-                <i
-                  className="inline-block h-1.5 w-1.5 bg-woodsmoke-500"
-                  style={{ clipPath: 'polygon(50% 0, 100% 100%, 0 100%)' }}
-                />
-                <span>10 mil</span>
-                <i
-                  className="inline-block h-2.5 w-2.5 bg-woodsmoke-500"
-                  style={{ clipPath: 'polygon(50% 0, 100% 100%, 0 100%)' }}
-                />
-                <span>100 mil</span>
-                <i
-                  className="inline-block h-4 w-4 bg-woodsmoke-500"
-                  style={{ clipPath: 'polygon(50% 0, 100% 100%, 0 100%)' }}
-                />
-                <span>500 mil</span>
-              </span>
-            ) : (
-              <>
-                <span className="flex items-center gap-0.5" aria-hidden="true">
-                  {topLabel.ramp.map((color) => (
-                    <i
-                      key={color}
-                      className="inline-block h-2 w-4 rounded-[2px]"
-                      style={{ backgroundColor: color }}
-                    />
-                  ))}
-                </span>
-                {topLabel.scaleText && (
-                  <span className="text-woodsmoke-500 font-semibold">
-                    {topLabel.scaleText}
-                  </span>
-                )}
-              </>
-            )}
-          </p>
-        </div>
-      )}
-
-      {/* Controles de zoom (descoberta + touch). */}
       <div className="absolute bottom-3 left-3 flex flex-col gap-1.5">
         <button
           type="button"
@@ -3287,8 +3698,8 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
         </button>
         <button
           type="button"
-          aria-label="Ver o Brasil inteiro"
-          title="Ver o Brasil inteiro"
+          aria-label={mode === 'exterior' ? 'Ver o mundo inteiro' : 'Ver o Brasil inteiro'}
+          title={mode === 'exterior' ? 'Ver o mundo inteiro' : 'Ver o Brasil inteiro'}
           onClick={() => resetView()}
           disabled={view.scale <= 1}
           className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 bg-black/60 text-base leading-none text-white backdrop-blur transition hover:bg-black/80 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-black/60"
@@ -3297,5 +3708,6 @@ export function Map({ selected, onSelect, results, mode = 'brasil', exterior, on
         </button>
       </div>
     </div>
+    </>
   )
 }
